@@ -365,7 +365,23 @@ async fn check_login_status(session_id: &str, uuid: &str) -> Result<String, Stri
             
             // If all of these are empty, we probably hit a redirect error page instead of the XML response
             if skey.is_empty() && wxsid.is_empty() && wxuin.is_empty() {
-                return Err(format!("Failed to parse login credentials from redirect body: {}", &body[..body.len().min(500)]));
+                // Parse WeChat error codes for user-friendly messages
+                let ret_code = regex_match(r"<ret>(.*?)</ret>", &body).unwrap_or_default();
+                let wechat_msg = regex_match(r"<message>(.*?)</message>", &body).unwrap_or_default();
+                
+                let friendly_msg = match ret_code.as_str() {
+                    "1203" => "登录失败：此微信号不能登录网页版微信。请尝试使用其他微信号，或在手机微信「设置 → 账号与安全」中检查网页登录权限。".to_string(),
+                    "1100" => "登录失败：微信已在其他地方登录网页版".to_string(),
+                    "1101" => "登录失败：会话已过期，请重新扫码".to_string(),
+                    "1102" => "登录失败：操作频率过快，请稍后再试".to_string(),
+                    code if !code.is_empty() => {
+                        let extra = if wechat_msg.is_empty() { String::new() } else { format!(" ({})", wechat_msg) };
+                        format!("登录失败：微信返回错误码 {}{}", code, extra)
+                    },
+                    _ => format!("登录失败：无法解析登录凭据，响应内容: {}", &body[..body.len().min(200)]),
+                };
+                
+                return Err(friendly_msg);
             }
 
             {
