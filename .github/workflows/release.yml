@@ -84,9 +84,9 @@ jobs:
           cd src-tauri/target/*/release/bundle/macos/
           
           # 重命名 .app.tar.gz 和 .sig
-          if [ -f "OpsClaw Tools.app.tar.gz" ]; then
-            mv "OpsClaw Tools.app.tar.gz" "OpsClaw Tools_${ARCH}.app.tar.gz"
-            mv "OpsClaw Tools.app.tar.gz.sig" "OpsClaw Tools_${ARCH}.app.tar.gz.sig"
+          if [ -f "helix.app.tar.gz" ]; then
+            mv "helix.app.tar.gz" "helix_${ARCH}.app.tar.gz"
+            mv "helix.app.tar.gz.sig" "helix_${ARCH}.app.tar.gz.sig"
             echo "Renamed assets to append Arch: $ARCH"
           fi
           
@@ -98,7 +98,7 @@ jobs:
           
           if [ -f "$UPDATER_JSON" ]; then
             echo "Updating $UPDATER_JSON to use renamed assets..."
-            sed -i '' "s/OpsClaw%20Tools.app.tar.gz/OpsClaw%20Tools_${ARCH}.app.tar.gz/g" "$UPDATER_JSON"
+            sed -i '' "s/helix.app.tar.gz/helix_${ARCH}.app.tar.gz/g" "$UPDATER_JSON"
           fi
 
       # 1. 上传 updater.json 到 Artifacts (供后续合并使用)
@@ -216,23 +216,23 @@ jobs:
               pub_date: $pub_date,
               platforms: {
                 "darwin-aarch64": {
-                  url: "\($dl)/OpsClaw.Tools_aarch64.app.tar.gz",
+                  url: "\($dl)/helix_aarch64.app.tar.gz",
                   signature: $mac_a64_sig
                 },
                 "darwin-x86_64": {
-                  url: "\($dl)/OpsClaw.Tools_x64.app.tar.gz",
+                  url: "\($dl)/helix_x64.app.tar.gz",
                   signature: $mac_x64_sig
                 },
                 "windows-x86_64": {
-                  url: "\($dl)/OpsClaw.Tools_\($ver)_x64-setup.exe",
+                  url: "\($dl)/helix_\($ver)_x64-setup.exe",
                   signature: $win_nsis_sig
                 },
                 "linux-x86_64": {
-                  url: "\($dl)/OpsClaw.Tools_\($ver)_amd64.AppImage",
+                  url: "\($dl)/helix_\($ver)_amd64.AppImage",
                   signature: $linux_amd64_sig
                 },
                 "linux-aarch64": {
-                  url: "\($dl)/OpsClaw.Tools_\($ver)_aarch64.AppImage",
+                  url: "\($dl)/helix_\($ver)_aarch64.AppImage",
                   signature: $linux_a64_sig
                 }
               }
@@ -247,7 +247,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           allowUpdates: true
-          name: "OpsClaw Tools ${{ github.ref_name }}"
+          name: "Helix ${{ github.ref_name }}"
           bodyFile: "release_notes.md"
           token: ${{ secrets.GITHUB_TOKEN }}
           artifacts: "all-artifacts/**/*,updater.json"
@@ -257,7 +257,7 @@ jobs:
 
   docker-build-amd64:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/OpsClaw-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
+    if: github.event_name != 'pull_request' && (github.repository == 'wangxiuwen/helix' || vars.ENABLE_DOCKER_PUSH == 'true')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -279,14 +279,14 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ github.repository_owner }}/opsclaw-manager:latest-amd64
-            ${{ github.repository_owner }}/opsclaw-manager:${{ github.ref_name }}-amd64
+            ${{ github.repository_owner }}/helix:latest-amd64
+            ${{ github.repository_owner }}/helix:${{ github.ref_name }}-amd64
           build-args: |
             USE_MIRROR=false
 
   docker-build-arm64:
     runs-on: ubuntu-24.04-arm
-    if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/OpsClaw-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
+    if: github.event_name != 'pull_request' && (github.repository == 'wangxiuwen/helix' || vars.ENABLE_DOCKER_PUSH == 'true')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -308,15 +308,15 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: |
-            ${{ github.repository_owner }}/opsclaw-manager:latest-arm64
-            ${{ github.repository_owner }}/opsclaw-manager:${{ github.ref_name }}-arm64
+            ${{ github.repository_owner }}/helix:latest-arm64
+            ${{ github.repository_owner }}/helix:${{ github.ref_name }}-arm64
           build-args: |
             USE_MIRROR=false
 
   docker-manifest:
     needs: [docker-build-amd64, docker-build-arm64]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/OpsClaw-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
+    if: github.event_name != 'pull_request' && (github.repository == 'wangxiuwen/helix' || vars.ENABLE_DOCKER_PUSH == 'true')
     steps:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -326,10 +326,10 @@ jobs:
 
       - name: Create and push manifest
         run: |
-          docker buildx imagetools create -t ${{ github.repository_owner }}/opsclaw-manager:latest \
-            ${{ github.repository_owner }}/opsclaw-manager:latest-amd64 \
-            ${{ github.repository_owner }}/opsclaw-manager:latest-arm64
+          docker buildx imagetools create -t ${{ github.repository_owner }}/helix:latest \
+            ${{ github.repository_owner }}/helix:latest-amd64 \
+            ${{ github.repository_owner }}/helix:latest-arm64
 
-          docker buildx imagetools create -t ${{ github.repository_owner }}/opsclaw-manager:${{ github.ref_name }} \
-            ${{ github.repository_owner }}/opsclaw-manager:${{ github.ref_name }}-amd64 \
-            ${{ github.repository_owner }}/opsclaw-manager:${{ github.ref_name }}-arm64
+          docker buildx imagetools create -t ${{ github.repository_owner }}/helix:${{ github.ref_name }} \
+            ${{ github.repository_owner }}/helix:${{ github.ref_name }}-amd64 \
+            ${{ github.repository_owner }}/helix:${{ github.ref_name }}-arm64
