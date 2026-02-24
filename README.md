@@ -13,6 +13,14 @@
 
 ---
 
+<div align="center">
+  <img src="docs/images/screenshot.png" alt="Helix 应用截图" width="700">
+  <br>
+  <em>Helix — 跨平台 AI 助理桌面应用</em>
+</div>
+
+---
+
 ## 简介
 
 Helix 是一个基于 [Tauri v2](https://v2.tauri.app/) 构建的跨平台 AI 助理桌面应用。它通过消息平台（微信文件传输助手等）与用户交互，内置具备工具调用能力的 AI Agent，可执行 Shell 命令、读写文件、搜索网页、操控浏览器等操作，并支持技能扩展和定时任务。
