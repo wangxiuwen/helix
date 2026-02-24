@@ -1,0 +1,6 @@
+services:
+  opsclaw-manager:
+    build:
+      dockerfile: docker/Dockerfile.backend
+      args:
+        FRONTEND_IMAGE: opsclaw-manager:latest

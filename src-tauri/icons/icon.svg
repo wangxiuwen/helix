@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="220" ry="220" fill="#0f1129"/>
+  
+  <!-- Inner glow -->
+  <rect x="40" y="40" width="944" height="944" rx="195" ry="195" fill="#141638" opacity="0.6"/>
+  
+  <!-- Claw body - center circle -->
+  <circle cx="512" cy="500" r="75" fill="#00d4ff"/>
+  <circle cx="512" cy="500" r="55" fill="#1a8aff"/>
+  
+  <!-- Left claw prong 1 -->
+  <path d="M 470,460 L 310,250 L 340,230 L 490,440 Z" fill="#00d4ff"/>
+  <!-- Left claw prong 2 -->
+  <path d="M 455,470 L 250,310 L 275,285 L 470,445 Z" fill="#00ccee"/>
+  <!-- Left claw prong 3 -->
+  <path d="M 448,485 L 220,390 L 235,360 L 458,460 Z" fill="#00bbdd"/>
+  
+  <!-- Right claw prong 1 -->
+  <path d="M 554,460 L 714,250 L 684,230 L 534,440 Z" fill="#8b5cf6"/>
+  <!-- Right claw prong 2 -->
+  <path d="M 569,470 L 774,310 L 749,285 L 554,445 Z" fill="#9966ff"/>
+  <!-- Right claw prong 3 -->
+  <path d="M 576,485 L 804,390 L 789,360 L 566,460 Z" fill="#aa77ff"/>
+  
+  <!-- Claw tips - left -->
+  <circle cx="305" cy="240" r="18" fill="#00d4ff"/>
+  <circle cx="248" cy="298" r="16" fill="#00ccee"/>
+  <circle cx="222" cy="375" r="14" fill="#00bbdd"/>
+  
+  <!-- Claw tips - right -->
+  <circle cx="719" cy="240" r="18" fill="#8b5cf6"/>
+  <circle cx="776" cy="298" r="16" fill="#9966ff"/>
+  <circle cx="802" cy="375" r="14" fill="#aa77ff"/>
+  
+  <!-- Body bottom -->
+  <ellipse cx="512" cy="580" rx="70" ry="95" fill="#1a8aff"/>
+  <ellipse cx="512" cy="570" rx="55" ry="75" fill="#00d4ff"/>
+  
+  <!-- Eyes -->
+  <circle cx="490" cy="490" r="14" fill="#0f1129"/>
+  <circle cx="534" cy="490" r="14" fill="#0f1129"/>
+  <circle cx="487" cy="486" r="5" fill="#ffffff"/>
+  <circle cx="531" cy="486" r="5" fill="#ffffff"/>
+  
+  <!-- Circuit dots -->
+  <circle cx="200" cy="200" r="6" fill="#00d4ff" opacity="0.3"/>
+  <circle cx="400" cy="200" r="6" fill="#00d4ff" opacity="0.2"/>
+  <circle cx="624" cy="200" r="6" fill="#8b5cf6" opacity="0.2"/>
+  <circle cx="824" cy="200" r="6" fill="#8b5cf6" opacity="0.3"/>
+  <circle cx="200" cy="820" r="6" fill="#00d4ff" opacity="0.2"/>
+  <circle cx="824" cy="820" r="6" fill="#8b5cf6" opacity="0.2"/>
+  
+  <!-- Circuit lines -->
+  <line x1="200" y1="206" x2="200" y2="290" stroke="#00d4ff" stroke-width="2" opacity="0.15"/>
+  <line x1="824" y1="206" x2="824" y2="290" stroke="#8b5cf6" stroke-width="2" opacity="0.15"/>
+  <line x1="206" y1="820" x2="290" y2="820" stroke="#00d4ff" stroke-width="2" opacity="0.15"/>
+  <line x1="818" y1="820" x2="734" y2="820" stroke="#8b5cf6" stroke-width="2" opacity="0.15"/>
+  
+  <!-- Bottom accent bar -->
+  <rect x="370" y="780" width="284" height="6" rx="3" fill="#00d4ff" opacity="0.4"/>
+  <rect x="410" y="800" width="204" height="4" rx="2" fill="#8b5cf6" opacity="0.3"/>
+</svg>

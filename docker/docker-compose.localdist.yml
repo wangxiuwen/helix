@@ -1,0 +1,5 @@
+services:
+  opsclaw-manager:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend.localdist
