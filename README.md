@@ -14,7 +14,7 @@
 ---
 
 <div align="center">
-  <img src="docs/images/screenshot.png" alt="Helix 应用截图" width="700">
+  <img src="docs/images/app-preview.png" alt="Helix 应用截图" width="700">
   <br>
   <em>Helix — 跨平台 AI 助理桌面应用</em>
 </div>
