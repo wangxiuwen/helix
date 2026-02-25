@@ -6,6 +6,7 @@
 //!
 //! Feishu WS v2 uses a protobuf frame format (pbbp2.Frame), not JSON text.
 
+use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -590,10 +591,20 @@ async fn handle_message_event(event: &Value) {
     let account_id = format!("feishu:{}", chat_id);
     let _ = crate::modules::database::save_message(&account_id, &text, false, 1, false);
 
+    // Cancel any in-progress agent task for the same chat
+    {
+        let mut tasks = RUNNING_TASKS.lock().unwrap();
+        if let Some(old_handle) = tasks.remove(&chat_id) {
+            info!("[Feishu] Aborting previous agent task for chat={}", chat_id);
+            old_handle.abort();
+        }
+    }
+
     // Spawn AI agent reply
     let msg_id = message_id.clone();
     let cid = chat_id.clone();
-    tauri::async_runtime::spawn(async move {
+    let cid_for_map = chat_id.clone();
+    let handle = tauri::async_runtime::spawn(async move {
         // Add typing reaction to original message (like OpenClaw's keyboard emoji)
         let reaction_id = api::add_reaction(&msg_id, "OnIt").await.unwrap_or_default();
 
@@ -619,5 +630,19 @@ async fn handle_message_event(event: &Value) {
         if !reaction_id.is_empty() {
             let _ = api::delete_reaction(&msg_id, &reaction_id).await;
         }
+
+        // Clean up from running tasks
+        let mut tasks = RUNNING_TASKS.lock().unwrap();
+        tasks.remove(&cid);
     });
+
+    // Track this task
+    {
+        let mut tasks = RUNNING_TASKS.lock().unwrap();
+        tasks.insert(cid_for_map, handle);
+    }
 }
+
+// Per-chat running agent task tracking
+static RUNNING_TASKS: Lazy<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
