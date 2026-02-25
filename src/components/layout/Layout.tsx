@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import ToastContainer from '../common/ToastContainer';
-import { isTauri } from '../../utils/env';
 import { useConfigStore } from '../../stores/useConfigStore';
 import { useDevOpsStore, AIProvider } from '../../stores/useDevOpsStore';
 import {
@@ -90,15 +89,12 @@ function Layout() {
 
     return (
         <div className="h-screen flex bg-[#FAFBFC] dark:bg-base-300">
-            {/* Tauri drag */}
-            {isTauri() && (
-                <div className="fixed top-0 left-0 right-0 h-9 z-[9999]" data-tauri-drag-region
-                    style={{ backgroundColor: 'rgba(0,0,0,0.001)', cursor: 'default', userSelect: 'none', WebkitUserSelect: 'none' }} />
-            )}
             <ToastContainer />
 
             {/* Icon Sidebar */}
-            <div className="w-16 shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center pt-14 pb-4 gap-1 border-r border-black/5 dark:border-white/5">
+            <div className="w-16 shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center pb-4 gap-1 border-r border-black/5 dark:border-white/5">
+                {/* Draggable top area for macOS traffic lights */}
+                <div className="w-full h-12 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} data-tauri-drag-region />
                 <div className="w-9 h-9 rounded-lg bg-white dark:bg-[#404040] flex items-center justify-center mb-4 cursor-pointer shadow-sm">
                     <Sparkles size={16} className="text-[#07c160]" />
                 </div>
@@ -170,7 +166,7 @@ function Layout() {
             </div>
 
             {/* Main content */}
-            <main className="flex-1 overflow-hidden flex pt-9">
+            <main className="flex-1 overflow-hidden flex">
                 <Outlet />
             </main>
 
