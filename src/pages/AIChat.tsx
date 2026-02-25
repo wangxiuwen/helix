@@ -85,7 +85,7 @@ function AIChat() {
         <>
             {/* Session list */}
             <div className="w-[250px] shrink-0 bg-[#f7f7f7] dark:bg-[#252525] flex flex-col border-r border-black/5 dark:border-white/5">
-                <div className="px-3 pt-4 pb-2 flex items-center gap-2">
+                <div className="px-3 pt-4 pb-2 flex items-center gap-2" data-tauri-drag-region>
                     <div className="flex-1 relative">
                         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
                         <input
@@ -164,7 +164,7 @@ function AIChat() {
                     </div>
                 ) : (
                     <>
-                        <div className="h-14 px-5 flex items-center border-b border-black/5 dark:border-white/5 shrink-0">
+                        <div className="h-14 px-5 flex items-center border-b border-black/5 dark:border-white/5 shrink-0" data-tauri-drag-region>
                             <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{activeSession.title}</h3>
                         </div>
                         <div className="flex-1 overflow-y-auto px-2 py-5 space-y-5">

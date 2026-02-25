@@ -214,7 +214,7 @@ export default function Skills() {
                 )}
 
                 {/* Header bar */}
-                <div className="h-14 px-5 flex items-center justify-between border-b border-black/5 dark:border-white/5 shrink-0">
+                <div className="h-14 px-5 flex items-center justify-between border-b border-black/5 dark:border-white/5 shrink-0" data-tauri-drag-region>
                     <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200">
                         {selected ? selected.name : '技能管理'}
                     </h3>

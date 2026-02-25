@@ -104,7 +104,7 @@ function Logs() {
 
             {/* Right: Log stream */}
             <div className="flex-1 flex flex-col min-w-0 bg-[#f5f5f5] dark:bg-[#1e1e1e]">
-                <div className="h-14 px-5 flex items-center border-b border-black/5 dark:border-white/5 shrink-0">
+                <div className="h-14 px-5 flex items-center border-b border-black/5 dark:border-white/5 shrink-0" data-tauri-drag-region>
                     <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200">系统日志</h3>
                     <span className="text-xs text-gray-400 ml-2">实时</span>
                 </div>
