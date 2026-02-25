@@ -400,30 +400,9 @@ export const useDevOpsStore = create<helixState>()(
             setActiveChatId: (id) => set({ activeChatId: id }),
 
             sendMessage: async (sessionId, content) => {
-                const MAX_TOOL_ROUNDS = 15;
-                const MAX_RETRIES_PER_TOOL = 1;
                 const state = get();
                 const session = state.chatSessions.find((s) => s.id === sessionId);
                 if (!session) return;
-
-                const provider = state.aiProviders.find((p) => p.enabled && p.apiKey);
-                if (!provider) {
-                    const errorMsg: ChatMessage = {
-                        id: generateId(), role: 'assistant',
-                        content: '⚠️ 请先在设置中配置并启用一个 AI 提供商，并填入 API Key。',
-                        timestamp: new Date().toISOString(),
-                    };
-                    set((s) => ({
-                        chatSessions: s.chatSessions.map((cs) =>
-                            cs.id === sessionId ? {
-                                ...cs,
-                                messages: [...cs.messages, { id: generateId(), role: 'user' as const, content, timestamp: new Date().toISOString() }, errorMsg],
-                                updatedAt: new Date().toISOString(),
-                            } : cs
-                        ),
-                    }));
-                    return;
-                }
 
                 // Add user message
                 set((s) => ({
@@ -438,205 +417,26 @@ export const useDevOpsStore = create<helixState>()(
                 }));
 
                 try {
-                    // Build system prompt — task completion oriented
-                    const toolsPrompt = buildSkillsPrompt();
-                    const agentSkillsPrompt = buildAgentSkillsPrompt(get().agentSkills);
+                    // Call Rust backend agent_chat which handles everything:
+                    // system prompt, tools, agent loop, memory
+                    const { invoke } = await import('@tauri-apps/api/core');
+                    const accountId = `chat:${sessionId}`;
+                    const result = await invoke<{ content: string }>('agent_chat', {
+                        accountId,
+                        content,
+                    });
 
-                    // Retrieve relevant memory context
-                    let memoryContext = '';
-                    try {
-                        const { invoke } = await import('@tauri-apps/api/core');
-                        const memories = await invoke<Array<{ content: string; score: number }>>('memory_search', { query: content, limit: 3 });
-                        if (memories && memories.length > 0) {
-                            memoryContext = '\n\n## 相关记忆\n' + memories.map(m => `- ${m.content}`).join('\n');
-                        }
-                    } catch { /* memory not available, skip */ }
-
-                    const systemPrompt = `你是 Helix，一个能力强大的通用 AI 智能体。
-
-## 核心原则
-
-1. **完整交付**: 你必须把用户交给你的任务彻底做完，不要半途而废。
-2. **自我验证**: 执行操作后，验证结果是否符合预期。如果不对，修正并重试。
-3. **主动解决**: 遇到错误不要直接报错给用户。先尝试替代方案，实在不行再说明。
-
-## ⚠️ 安全规则（必须严格遵守）
-
-### 只读操作 → 直接执行，无需确认：
-- 查询、列表、搜索、状态检查
-- 文件读取、日志查看
-- Dry-run 和模拟执行
-- 任何不改变系统状态的操作
-
-### 写入操作 → 必须先说明方案，等待用户确认后执行：
-- 创建、修改、删除文件或数据
-- 重启服务、部署应用
-- 修改配置、更新密钥
-- 网络请求（POST/PUT/DELETE）
-- 任何改变系统状态的操作
-
-**执行流程**：
-1. 先用只读操作收集信息，分析现状
-2. 制定操作方案，列出即将执行的写入操作
-3. 明确告知用户将要做什么，等待确认
-4. 用户确认后再执行写入操作
-5. 执行后验证结果
-
-## 工作流程
-
-- 分析用户需求 → 规划步骤 → 逐步执行 → 验证结果 → 总结交付
-- 每次工具调用后评估：任务完成了吗？没完成就继续。
-- 最终回复以 ✅ 开头总结完成的工作，或以 ❌ 开头说明无法完成的原因。
-
-## 回复格式
-
-- 用中文回复，简洁实用
-- 查询结果用表格或列表展示
-- 多步操作时说明当前在第几步
-${memoryContext}
-${toolsPrompt}
-${agentSkillsPrompt}`;
-
-                    const currentSession = get().chatSessions.find((s) => s.id === sessionId)!;
-                    const messages: Array<{ role: string; content: string }> = [
-                        { role: 'system', content: systemPrompt },
-                        ...currentSession.messages.map((m) => ({ role: m.role === 'tool' ? 'user' : m.role, content: m.content })),
-                    ];
-
-                    const tools = getToolsForAI();
-                    const loopDetector = new ToolLoopDetector();
-                    const allToolEvents: ToolEvent[] = [];
-                    const allToolCalls: Array<{ name: string; args: Record<string, any>; result: string; status: 'done' | 'error' }> = [];
-
-                    // === Agentic Loop — keep going until task is complete ===
-                    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-                        const result = await callAI(provider, messages, tools);
-
-                        // No tool calls → AI decided task is done (or gave final answer)
-                        if (!result.toolCalls || result.toolCalls.length === 0) {
-                            const assistantMsg: ChatMessage = {
-                                id: generateId(), role: 'assistant',
-                                content: result.content || '(无响应)',
-                                timestamp: new Date().toISOString(),
-                                model: provider.defaultModel,
-                                toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-                            };
-                            set((s) => ({
-                                chatSessions: s.chatSessions.map((cs) =>
-                                    cs.id === sessionId ? {
-                                        ...cs, messages: [...cs.messages, assistantMsg],
-                                        updatedAt: new Date().toISOString(), provider: provider.id,
-                                    } : cs
-                                ),
-                            }));
-
-                            // Auto-save conversation summary to memory
-                            try {
-                                const { invoke } = await import('@tauri-apps/api/core');
-                                await invoke('memory_save_conversation', {
-                                    accountId: 'helix-chat',
-                                    userMsg: content,
-                                    assistantMsg: result.content || '',
-                                });
-                            } catch { /* memory save failed, non-critical */ }
-
-                            return;
-                        }
-
-                        // Process tool calls
-                        let needsConfirm = false;
-                        let confirmInfo: ChatMessage['pendingConfirm'] = undefined;
-                        const roundToolResults: string[] = [];
-
-                        for (const tc of result.toolCalls) {
-                            const args = JSON.parse(tc.arguments || '{}');
-                            const tool = findTool(tc.name);
-
-                            // Loop detection
-                            const loopCheck = loopDetector.record(tc.name, args);
-                            if (loopCheck.blocked) {
-                                allToolEvents.push({ phase: 'loop_blocked', toolName: tc.name, args, meta: loopCheck.message, timestamp: Date.now() });
-                                const warnMsg: ChatMessage = {
-                                    id: generateId(), role: 'assistant',
-                                    content: `🔁 ${loopCheck.message}\n\n已执行的工具结果：\n${allToolCalls.map(t => `• ${t.name}: ${t.result.slice(0, 200)}`).join('\n')}`,
-                                    timestamp: new Date().toISOString(),
-                                    toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-                                };
-                                set((s) => ({
-                                    chatSessions: s.chatSessions.map((cs) =>
-                                        cs.id === sessionId ? { ...cs, messages: [...cs.messages, warnMsg], updatedAt: new Date().toISOString() } : cs
-                                    ),
-                                }));
-                                return;
-                            }
-
-                            // Dangerous operation → confirm
-                            if (tool?.dangerous) {
-                                needsConfirm = true;
-                                confirmInfo = {
-                                    toolName: tc.name,
-                                    args,
-                                    description: `${tool.description}\n参数: ${JSON.stringify(args, null, 2)}`,
-                                };
-                                break;
-                            }
-
-                            // Execute tool with retry
-                            allToolEvents.push({ phase: 'start', toolName: tc.name, args, dangerous: !!tool?.dangerous, timestamp: Date.now() });
-                            let toolResult = '';
-                            let toolStatus: 'done' | 'error' = 'done';
-
-                            for (let retry = 0; retry <= MAX_RETRIES_PER_TOOL; retry++) {
-                                try {
-                                    const { result: res } = await executeTool(tc.name, args);
-                                    toolResult = res;
-                                    toolStatus = 'done';
-                                    break;
-                                } catch (err: any) {
-                                    toolResult = `执行失败: ${err.message || '未知错误'}`;
-                                    toolStatus = 'error';
-                                    if (retry < MAX_RETRIES_PER_TOOL) {
-                                        allToolEvents.push({ phase: 'retry', toolName: tc.name, args, meta: `Retry ${retry + 1}`, timestamp: Date.now() });
-                                    }
-                                }
-                            }
-
-                            allToolCalls.push({ name: tc.name, args, result: toolResult, status: toolStatus });
-                            allToolEvents.push({ phase: toolStatus === 'done' ? 'result' : 'error', toolName: tc.name, result: toolResult, timestamp: Date.now() });
-                            roundToolResults.push(`[工具 ${tc.name}]\n${toolResult}`);
-                        }
-
-                        if (needsConfirm && confirmInfo) {
-                            const confirmMsg: ChatMessage = {
-                                id: generateId(), role: 'assistant',
-                                content: `⚠️ 需要确认执行以下操作：\n\n**${confirmInfo.description}**\n\n请回复「确认」或「取消」`,
-                                timestamp: new Date().toISOString(),
-                                pendingConfirm: confirmInfo,
-                                toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-                            };
-                            set((s) => ({
-                                chatSessions: s.chatSessions.map((cs) =>
-                                    cs.id === sessionId ? { ...cs, messages: [...cs.messages, confirmMsg], updatedAt: new Date().toISOString() } : cs
-                                ),
-                            }));
-                            return;
-                        }
-
-                        // Feed results back for next round — include round progress
-                        messages.push({ role: 'assistant', content: result.content || `[执行中 ${round + 1}/${MAX_TOOL_ROUNDS}]` });
-                        messages.push({ role: 'user', content: `工具执行结果 (第${round + 1}轮)：\n${roundToolResults.join('\n\n')}\n\n请评估：任务完成了吗？如果完成，给出最终总结；如果未完成，继续执行下一步。` });
-                    }
-
-                    // Max rounds reached → summarize what happened
-                    const summaryMsg: ChatMessage = {
+                    const assistantMsg: ChatMessage = {
                         id: generateId(), role: 'assistant',
-                        content: `⚠️ 达到最大工具调用轮次 (${MAX_TOOL_ROUNDS})。已执行 ${allToolCalls.length} 个工具调用。\n\n${allToolCalls.map(t => `• ${t.name}: ${t.result.slice(0, 200)}`).join('\n')}`,
+                        content: result.content || '(无响应)',
                         timestamp: new Date().toISOString(),
-                        toolCalls: allToolCalls,
                     };
                     set((s) => ({
                         chatSessions: s.chatSessions.map((cs) =>
-                            cs.id === sessionId ? { ...cs, messages: [...cs.messages, summaryMsg], updatedAt: new Date().toISOString() } : cs
+                            cs.id === sessionId ? {
+                                ...cs, messages: [...cs.messages, assistantMsg],
+                                updatedAt: new Date().toISOString(),
+                            } : cs
                         ),
                     }));
                 } catch (err: any) {

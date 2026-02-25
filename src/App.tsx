@@ -5,7 +5,7 @@ import CronJobs from './pages/CronJobs';
 import Skills from './pages/Skills';
 import Logs from './pages/Logs';
 import Settings from './pages/Settings';
-import WeChat from './pages/WeChat';
+import AIChat from './pages/AIChat';
 import ThemeManager from './components/common/ThemeManager';
 import { useEffect } from 'react';
 import { useConfigStore } from './stores/useConfigStore';
@@ -18,7 +18,7 @@ const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <WeChat />,
+        element: <AIChat />,
       },
       {
         path: 'cron-jobs',
