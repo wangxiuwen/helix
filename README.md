@@ -27,11 +27,55 @@ Helix 是一个基于 [Tauri v2](https://v2.tauri.app/) 构建的跨平台 AI �
 
 **核心能力：**
 
-- 💬 **消息平台集成** — 微信文件传输助手（飞书、钉钉、企业微信即将支持）
+- 💬 **消息平台集成** — 微信文件传输助手、飞书（钉钉、企业微信即将支持）
 - 🤖 **AI Agent** — 支持工具调用的完整 Agent 循环，可执行 Shell、文件操作、网页搜索、浏览器自动化等
 - 🧠 **长期记忆** — 跨会话的信息存储与召回
 - 🧩 **技能系统** — 可安装、创建和管理的技能插件，支持从 Git 仓库安装
 - ⏰ **定时任务** — 可配置的 Cron 计划任务
+
+## 飞书机器人配置
+
+在[飞书开放平台](https://open.feishu.cn/app)创建自建应用，启用「机器人」能力，并在「事件与回调」中开启**长连接**模式，添加 `im.message.receive_v1` 事件。
+
+所需权限范围（Scopes）：
+
+```json
+{
+  "scopes": {
+    "tenant": [
+      "aily:file:read",
+      "aily:file:write",
+      "application:application.app_message_stats.overview:readonly",
+      "application:application:self_manage",
+      "application:bot.menu:write",
+      "cardkit:card:write",
+      "contact:contact.base:readonly",
+      "contact:user.employee_id:readonly",
+      "corehr:file:download",
+      "docs:document.content:read",
+      "event:ip_list",
+      "im:chat",
+      "im:chat.access_event.bot_p2p_chat:read",
+      "im:chat.members:bot_access",
+      "im:message",
+      "im:message.group_at_msg:readonly",
+      "im:message.group_msg",
+      "im:message.p2p_msg:readonly",
+      "im:message:readonly",
+      "im:message:send_as_bot",
+      "im:resource",
+      "sheets:spreadsheet",
+      "wiki:wiki:readonly"
+    ],
+    "user": [
+      "aily:file:read",
+      "aily:file:write",
+      "contact:contact.base:readonly",
+      "im:chat.access_event.bot_p2p_chat:read"
+    ]
+  }
+}
+```
 
 ## 技术栈
 

@@ -46,3 +46,7 @@ __pycache__/
 
 DOCKER_DEPLOYMENT.md
 pnpm-lock.yaml
+
+# Feishu SDK temp files
+larksuiteoapi-*.tgz
+package/

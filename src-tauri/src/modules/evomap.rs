@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::info;
 
-use super::config::get_data_dir;
+use crate::modules::config::get_data_dir;
 
 // ============================================================================
 // Types

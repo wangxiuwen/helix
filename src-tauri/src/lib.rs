@@ -213,8 +213,14 @@ pub fn run() {
             // Start WeChat background polling (independent of frontend)
             modules::filehelper::start_background_polling();
 
+            // Start heartbeat monitor for auto-reconnect detection
+            modules::filehelper::bot_api::start_heartbeat_monitor();
+
             // Start embedded HTTP API server with Swagger UI
             modules::api_server::start_api_server(9520);
+
+            // Start Feishu gateway if configured
+            modules::feishu::start_feishu_if_enabled();
 
             Ok(())
         })
@@ -402,6 +408,15 @@ pub fn run() {
             // Subagents
             modules::subagents::spawn_subagent,
             modules::subagents::spawn_subagents_batch,
+            // Feishu commands
+            modules::feishu::feishu_get_config,
+            modules::feishu::feishu_save_config,
+            modules::feishu::feishu_connect,
+            modules::feishu::feishu_disconnect,
+            modules::feishu::feishu_get_status,
+            modules::feishu::feishu_send_message,
+            modules::feishu::feishu_send_to_user,
+            modules::feishu::feishu_test_connection,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

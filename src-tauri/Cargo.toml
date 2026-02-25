@@ -1,6 +1,6 @@
 [package]
 name = "helix"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 license = "CC-BY-NC-SA-4.0"
@@ -55,10 +55,13 @@ async-openai = "0.27"
 sysinfo = "0.38.2"
 chromiumoxide = { version = "0.8.0", features = ["tokio"] }
 lazy_static = "1.5.0"
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tower-http = { version = "0.6", features = ["cors"] }
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
+urlencoding = "2"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+flate2 = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
