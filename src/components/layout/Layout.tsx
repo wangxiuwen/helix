@@ -98,7 +98,7 @@ function Layout() {
             <ToastContainer />
 
             {/* Icon Sidebar */}
-            <div className="w-[54px] shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center pt-14 pb-4 gap-1 border-r border-black/5 dark:border-white/5">
+            <div className="w-16 shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center pt-14 pb-4 gap-1 border-r border-black/5 dark:border-white/5">
                 <div className="w-9 h-9 rounded-lg bg-white dark:bg-[#404040] flex items-center justify-center mb-4 cursor-pointer shadow-sm">
                     <Sparkles size={16} className="text-[#07c160]" />
                 </div>
@@ -145,7 +145,7 @@ function Layout() {
 
                     {/* Popup menu */}
                     {showMoreMenu && (
-                        <div className="absolute bottom-0 left-[54px] w-[180px] bg-white dark:bg-[#353535] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
+                        <div className="absolute bottom-0 left-16 w-[180px] bg-white dark:bg-[#353535] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
                             <button
                                 onClick={() => { setShowSettings(true); setShowMoreMenu(false); }}
                                 className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-[#f5f5f5] dark:hover:bg-[#404040] flex items-center gap-3"
