@@ -7,13 +7,13 @@ import 'highlight.js/styles/github-dark.min.css';
 import {
     Bot,
     Check,
-    ChevronLeft,
     ChevronRight,
     Clock,
     Blocks,
     MessageSquare,
     Moon,
     Plus,
+    Search,
     Send,
     Settings as SettingsIcon,
     Sparkles,
@@ -22,8 +22,7 @@ import {
     User,
     Wrench,
     X,
-    MoreVertical,
-    Info,
+    Activity,
 } from 'lucide-react';
 import { useDevOpsStore } from '../stores/useDevOpsStore';
 import { useConfigStore } from '../stores/useConfigStore';
@@ -45,26 +44,13 @@ function AIChat() {
 
     const { config, saveConfig } = useConfigStore();
     const [input, setInput] = useState('');
-    const [sidebarOpen, setSidebarOpen] = useState(true);
-    const [menuOpen, setMenuOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const menuRef = useRef<HTMLDivElement>(null);
     const activeSession = chatSessions.find((s) => s.id === activeChatId);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [activeSession?.messages]);
-
-    // Close dropdown on outside click
-    useEffect(() => {
-        const handler = (e: MouseEvent) => {
-            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-                setMenuOpen(false);
-            }
-        };
-        document.addEventListener('mousedown', handler);
-        return () => document.removeEventListener('mousedown', handler);
-    }, []);
 
     const handleSend = async () => {
         if (!input.trim()) return;
@@ -92,317 +78,315 @@ function AIChat() {
 
     const isDark = config?.theme === 'dark';
 
+    // Filter sessions by search
+    const filteredSessions = chatSessions.filter((s) =>
+        !searchQuery || s.title.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    // Get last message preview for session list
+    const getLastMessage = (session: typeof chatSessions[0]) => {
+        if (!session.messages || session.messages.length === 0) return '';
+        const last = session.messages[session.messages.length - 1];
+        const content = last.content || '';
+        return content.length > 40 ? content.slice(0, 40) + '...' : content;
+    };
+
+    const getLastTime = (session: typeof chatSessions[0]) => {
+        if (!session.messages || session.messages.length === 0) return '';
+        const last = session.messages[session.messages.length - 1];
+        if (!last.timestamp) return '';
+        const d = new Date(last.timestamp);
+        const now = new Date();
+        if (d.toDateString() === now.toDateString()) {
+            return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+        return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+    };
+
     return (
         <div className="flex h-full overflow-hidden">
-            {/* ===== Collapsible Sidebar ===== */}
-            <div
-                className={`flex flex-col border-r border-base-200/60 bg-base-100/80 backdrop-blur-sm transition-all duration-300 ease-in-out shrink-0 ${sidebarOpen ? 'w-64' : 'w-0 overflow-hidden border-r-0'
-                    }`}
-            >
-                {/* Logo + collapse */}
-                <div className="flex items-center justify-between px-4 h-14 shrink-0">
-                    <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-600 to-blue-500 flex items-center justify-center">
-                            <Sparkles size={14} className="text-white" />
-                        </div>
-                        <span className="font-bold text-base tracking-tight text-base-content">Helix</span>
-                    </div>
-                    <button
-                        className="btn btn-ghost btn-xs btn-square"
-                        onClick={() => setSidebarOpen(false)}
-                        title={t('chat.collapse_sidebar', '收起侧边栏')}
-                    >
-                        <ChevronLeft size={16} />
-                    </button>
+            {/* ===== Column 1: Icon sidebar (WeChat style narrow bar) ===== */}
+            <div className="w-[54px] shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center py-4 gap-1 border-r border-black/5 dark:border-white/5">
+                {/* Avatar / Logo */}
+                <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center mb-4 cursor-pointer shadow-sm">
+                    <Sparkles size={16} className="text-white" />
                 </div>
 
-                {/* New Chat button */}
-                <div className="px-3 pb-2">
+                {/* Nav icons */}
+                <button
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-[#07c160] hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                    title={t('nav.channels', '对话')}
+                >
+                    <MessageSquare size={20} />
+                </button>
+                <button
+                    onClick={() => navigate('/skills')}
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                    title={t('nav.skills', '技能')}
+                >
+                    <Blocks size={20} />
+                </button>
+                <button
+                    onClick={() => navigate('/cron-jobs')}
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                    title={t('nav.cron_jobs', '定时任务')}
+                >
+                    <Clock size={20} />
+                </button>
+                <button
+                    onClick={() => navigate('/logs')}
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                    title={t('nav.logs', '日志')}
+                >
+                    <Activity size={20} />
+                </button>
+
+                {/* Spacer */}
+                <div className="flex-1" />
+
+                {/* Bottom icons */}
+                <button
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                    onClick={toggleTheme}
+                    title={isDark ? 'Light' : 'Dark'}
+                >
+                    {isDark ? <Sun size={18} /> : <Moon size={18} />}
+                </button>
+                <button
+                    onClick={() => navigate('/settings')}
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                    title={t('nav.settings', '设置')}
+                >
+                    <SettingsIcon size={18} />
+                </button>
+            </div>
+
+            {/* ===== Column 2: Session list ===== */}
+            <div className="w-[250px] shrink-0 bg-[#f7f7f7] dark:bg-[#252525] flex flex-col border-r border-black/5 dark:border-white/5">
+                {/* Search + New */}
+                <div className="px-3 pt-4 pb-2 flex items-center gap-2">
+                    <div className="flex-1 relative">
+                        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input
+                            type="text"
+                            className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400"
+                            placeholder={t('chat.search', '搜索')}
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                        />
+                    </div>
                     <button
-                        className="btn btn-outline btn-sm w-full gap-2 rounded-xl border-base-300 hover:border-primary/50 hover:bg-primary/5 transition-all"
+                        className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:bg-black/5 dark:hover:bg-white/10 transition-colors shrink-0"
                         onClick={() => createChatSession()}
+                        title={t('chat.new_session', '新对话')}
                     >
-                        <Plus size={14} />
-                        {t('chat.new_session', '新对话')}
+                        <Plus size={16} />
                     </button>
                 </div>
 
                 {/* Session list */}
-                <div className="flex-1 overflow-y-auto px-2">
-                    <div className="text-xs font-medium text-base-content/40 px-2 py-2 uppercase tracking-wider">
-                        {t('chat.all_sessions', '所有对话')}
-                    </div>
-                    {chatSessions.length === 0 ? (
-                        <div className="px-3 py-8 text-center text-base-content/30 text-xs">
+                <div className="flex-1 overflow-y-auto">
+                    {filteredSessions.length === 0 ? (
+                        <div className="px-4 py-12 text-center text-gray-400 text-xs">
                             {t('chat.no_sessions', '暂无对话')}
                         </div>
                     ) : (
-                        chatSessions.map((session) => (
+                        filteredSessions.map((session) => (
                             <div
                                 key={session.id}
-                                className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors group mb-0.5 ${activeChatId === session.id
-                                    ? 'bg-primary/10 text-primary'
-                                    : 'hover:bg-base-200/60 text-base-content/70'
+                                className={`flex items-center px-3 py-3 cursor-pointer transition-colors group ${activeChatId === session.id
+                                        ? 'bg-[#c9c9c9] dark:bg-[#383838]'
+                                        : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'
                                     }`}
                                 onClick={() => setActiveChatId(session.id)}
                             >
-                                <div className="flex items-center gap-2 min-w-0 flex-1">
-                                    <MessageSquare size={14} className="shrink-0 opacity-50" />
-                                    <span className="text-sm truncate">{session.title}</span>
+                                {/* Avatar */}
+                                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-400 to-blue-500 flex items-center justify-center shrink-0 mr-3">
+                                    <Bot size={18} className="text-white" />
                                 </div>
-                                <button
-                                    className="opacity-0 group-hover:opacity-100 btn btn-ghost btn-xs btn-square transition-opacity"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteChatSession(session.id);
-                                    }}
-                                >
-                                    <Trash2 size={12} />
-                                </button>
+                                {/* Info */}
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                                            {session.title}
+                                        </span>
+                                        <span className="text-[10px] text-gray-400 dark:text-gray-500 shrink-0 ml-2">
+                                            {getLastTime(session)}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between mt-0.5">
+                                        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                                            {getLastMessage(session)}
+                                        </p>
+                                        <button
+                                            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-all shrink-0 ml-1"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                deleteChatSession(session.id);
+                                            }}
+                                        >
+                                            <Trash2 size={12} className="text-gray-400" />
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         ))
                     )}
                 </div>
             </div>
 
-            {/* ===== Main Area ===== */}
-            <div className="flex-1 flex flex-col min-w-0">
-                {/* Top bar */}
-                <div className="flex items-center justify-between px-4 h-14 shrink-0">
-                    {/* Left: sidebar toggle */}
-                    <div className="flex items-center gap-2">
-                        {!sidebarOpen && (
-                            <button
-                                className="btn btn-ghost btn-sm btn-square"
-                                onClick={() => setSidebarOpen(true)}
-                                title={t('chat.expand_sidebar', '展开侧边栏')}
-                            >
-                                <ChevronRight size={16} />
-                            </button>
-                        )}
-                    </div>
-
-                    {/* Right: nav buttons + menu */}
-                    <div className="flex items-center gap-1">
-                        <button
-                            className="btn btn-ghost btn-sm gap-1.5 rounded-lg"
-                            onClick={() => navigate('/cron-jobs')}
-                        >
-                            <Clock size={14} />
-                            <span className="text-xs">{t('nav.cron_jobs', '定时任务')}</span>
-                        </button>
-                        <button
-                            className="btn btn-ghost btn-sm gap-1.5 rounded-lg"
-                            onClick={() => navigate('/skills')}
-                        >
-                            <Blocks size={14} />
-                            <span className="text-xs">{t('nav.skills', '技能')}</span>
-                        </button>
-
-                        {/* Theme toggle */}
-                        <button
-                            className="btn btn-ghost btn-sm btn-square rounded-lg"
-                            onClick={toggleTheme}
-                            title={isDark ? 'Light mode' : 'Dark mode'}
-                        >
-                            {isDark ? <Sun size={14} /> : <Moon size={14} />}
-                        </button>
-
-                        {/* Dropdown menu */}
-                        <div className="relative" ref={menuRef}>
-                            <button
-                                className="btn btn-ghost btn-sm btn-square rounded-lg"
-                                onClick={() => setMenuOpen(!menuOpen)}
-                            >
-                                <MoreVertical size={16} />
-                            </button>
-                            {menuOpen && (
-                                <div className="absolute right-0 top-full mt-1 w-44 bg-base-100 rounded-xl shadow-lg border border-base-200 py-1 z-50">
-                                    <button
-                                        className="flex items-center gap-3 w-full px-4 py-2.5 text-sm hover:bg-base-200/60 transition-colors text-left"
-                                        onClick={() => { setMenuOpen(false); navigate('/settings'); }}
-                                    >
-                                        <SettingsIcon size={15} className="text-base-content/50" />
-                                        {t('nav.settings', '设置')}
-                                    </button>
-                                    <button
-                                        className="flex items-center gap-3 w-full px-4 py-2.5 text-sm hover:bg-base-200/60 transition-colors text-left"
-                                        onClick={() => { setMenuOpen(false); navigate('/logs'); }}
-                                    >
-                                        <Info size={15} className="text-base-content/50" />
-                                        {t('nav.logs', '日志')}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-
-                {/* Chat content */}
-                {!activeSession || activeSession.messages.length === 0 ? (
-                    /* Welcome / empty state */
-                    <div className="flex-1 flex items-center justify-center px-6">
-                        <div className="text-center max-w-lg">
-                            <h1 className="text-2xl font-bold bg-gradient-to-r from-violet-600 to-blue-500 bg-clip-text text-transparent mb-3">
-                                {t('chat.welcome', 'Hi, how can I help you?')}
-                            </h1>
-                            <p className="text-sm text-base-content/40 mb-8">
-                                {t('chat.welcome_desc', 'System management, automation, and more — all through natural language.')}
+            {/* ===== Column 3: Chat area ===== */}
+            <div className="flex-1 flex flex-col min-w-0 bg-[#f5f5f5] dark:bg-[#1e1e1e]">
+                {!activeSession ? (
+                    /* Empty state */
+                    <div className="flex-1 flex items-center justify-center">
+                        <div className="text-center">
+                            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500/10 to-blue-500/10 flex items-center justify-center mx-auto mb-4">
+                                <Sparkles size={32} className="text-violet-400" />
+                            </div>
+                            <h2 className="text-lg font-medium text-gray-600 dark:text-gray-400 mb-2">
+                                {t('chat.welcome', 'Helix 智能助手')}
+                            </h2>
+                            <p className="text-xs text-gray-400 dark:text-gray-500 max-w-sm">
+                                {t('chat.welcome_desc', '选择一个对话或开始新对话')}
                             </p>
-
-                            {/* Input card in center */}
-                            <div className="bg-base-100 border border-base-200/60 rounded-2xl shadow-sm p-4">
-                                <textarea
-                                    className="w-full bg-transparent resize-none border-0 outline-none text-sm placeholder:text-base-content/30 min-h-[80px]"
-                                    placeholder={t('chat.input_placeholder', 'Ask me anything...')}
-                                    value={input}
-                                    onChange={(e) => setInput(e.target.value)}
-                                    onKeyDown={handleKeyDown}
-                                    rows={3}
-                                />
-                                <div className="flex items-center justify-between mt-2">
-                                    <div className="text-xs text-base-content/30">
-                                        {t('chat.ai_disclaimer', 'Content is generated by AI for reference only.')}
-                                    </div>
-                                    <button
-                                        className="btn btn-primary btn-sm btn-circle"
-                                        onClick={handleSend}
-                                        disabled={!input.trim() || loading.chat}
-                                    >
-                                        <Send size={14} />
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* Quick hints */}
-                            <div className="mt-4 flex flex-wrap justify-center gap-2">
-                                {[
-                                    t('chat.hint_weather', '今天天气怎么样'),
-                                    t('chat.hint_news', '帮我搜索新闻'),
-                                    t('chat.hint_sysinfo', '查看系统信息'),
-                                    t('chat.hint_script', '写一个 Python 脚本'),
-                                ].map((hint) => (
-                                    <button
-                                        key={hint}
-                                        className="btn btn-ghost btn-xs rounded-full border border-base-200/60 text-base-content/50 hover:text-base-content hover:border-base-300"
-                                        onClick={() => {
-                                            const sid = activeChatId || createChatSession();
-                                            setInput('');
-                                            sendMessage(sid, hint);
-                                        }}
-                                    >
-                                        {hint}
-                                    </button>
-                                ))}
-                            </div>
+                            <button
+                                className="mt-4 px-4 py-2 text-sm bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors"
+                                onClick={() => createChatSession()}
+                            >
+                                <Plus size={14} className="inline mr-1" />
+                                {t('chat.start', '开始对话')}
+                            </button>
                         </div>
                     </div>
                 ) : (
                     <>
+                        {/* Chat header */}
+                        <div className="h-14 px-5 flex items-center justify-between border-b border-black/5 dark:border-white/5 shrink-0 bg-[#f5f5f5] dark:bg-[#1e1e1e]">
+                            <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                                {activeSession.title}
+                            </h3>
+                        </div>
+
                         {/* Messages */}
-                        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+                        <div className="flex-1 overflow-y-auto px-16 py-5 space-y-5">
+                            {activeSession.messages.length === 0 && (
+                                <div className="text-center py-12 text-gray-400">
+                                    <Bot size={40} className="mx-auto mb-3 opacity-30" />
+                                    <p className="text-sm">{t('chat.empty_hint', '发送消息开始对话')}</p>
+                                </div>
+                            )}
                             {activeSession.messages.map((msg) => (
                                 <div
                                     key={msg.id}
-                                    className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                                    className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
                                 >
-                                    {msg.role !== 'user' && (
-                                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center shrink-0 mt-0.5">
-                                            <Bot size={15} className="text-white" />
-                                        </div>
-                                    )}
-                                    <div
-                                        className={`max-w-[70%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${msg.role === 'user'
-                                            ? 'bg-primary text-primary-content'
-                                            : 'bg-base-200/60 text-base-content'
-                                            }`}
-                                    >
-                                        <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-base-300/50 [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:overflow-x-auto [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_table]:text-xs">
-                                            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                                                {msg.content}
-                                            </ReactMarkdown>
-                                        </div>
-
-                                        {/* Tool calls */}
-                                        {msg.toolCalls && msg.toolCalls.length > 0 && (
-                                            <div className="mt-2 space-y-1.5">
-                                                {msg.toolCalls.map((tc: any, i: number) => (
-                                                    <details key={i} className="group rounded-lg bg-base-300/30 overflow-hidden">
-                                                        <summary className="flex items-center gap-2 text-xs px-3 py-2 cursor-pointer select-none hover:bg-base-300/50 transition-colors">
-                                                            <ChevronRight size={12} className="group-open:rotate-90 transition-transform text-base-content/40 shrink-0" />
-                                                            <Wrench size={12} className="text-violet-500 shrink-0" />
-                                                            <span className="font-mono font-medium">{tc.name}</span>
-                                                            <span className={`ml-auto badge badge-xs ${tc.status === 'done' ? 'badge-success' : 'badge-error'}`}>
-                                                                {tc.status === 'done' ? '✓' : '✗'}
-                                                            </span>
-                                                        </summary>
-                                                        <div className="px-3 pb-2 text-xs font-mono text-base-content/70 whitespace-pre-wrap max-h-40 overflow-y-auto border-t border-base-300/50">
-                                                            {tc.result?.slice(0, 500) || '(no result)'}
-                                                            {tc.result && tc.result.length > 500 && <span className="text-base-content/30">...</span>}
-                                                        </div>
-                                                    </details>
-                                                ))}
-                                            </div>
-                                        )}
-
-                                        {/* Confirm buttons */}
-                                        {msg.pendingConfirm && (
-                                            <div className="mt-3 flex gap-2">
-                                                <button
-                                                    className="btn btn-sm btn-success gap-1"
-                                                    onClick={() => confirmToolExecution(activeChatId!, msg.id)}
-                                                >
-                                                    <Check size={14} />{t('chat.confirm', '确认')}
-                                                </button>
-                                                <button className="btn btn-sm btn-ghost gap-1">
-                                                    <X size={14} />{t('chat.cancel', '取消')}
-                                                </button>
-                                            </div>
-                                        )}
+                                    {/* Avatar */}
+                                    <div className={`w-9 h-9 rounded-md shrink-0 flex items-center justify-center mt-0.5 ${msg.role === 'user'
+                                            ? 'bg-gradient-to-br from-blue-400 to-teal-400'
+                                            : 'bg-gradient-to-br from-violet-500 to-blue-500'
+                                        }`}>
+                                        {msg.role === 'user'
+                                            ? <User size={16} className="text-white" />
+                                            : <Bot size={16} className="text-white" />
+                                        }
                                     </div>
-                                    {msg.role === 'user' && (
-                                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-teal-500 flex items-center justify-center shrink-0 mt-0.5">
-                                            <User size={15} className="text-white" />
+
+                                    {/* Bubble */}
+                                    <div className={`max-w-[65%] relative ${msg.role === 'user' ? 'order-first' : ''
+                                        }`}>
+                                        {/* Arrow */}
+                                        <div className={`absolute top-3 w-2 h-2 rotate-45 ${msg.role === 'user'
+                                                ? '-right-1 bg-[#95ec69] dark:bg-[#3eb575]'
+                                                : '-left-1 bg-white dark:bg-[#2e2e2e]'
+                                            }`} />
+
+                                        <div className={`rounded-md px-3 py-2.5 text-sm leading-relaxed relative ${msg.role === 'user'
+                                                ? 'bg-[#95ec69] dark:bg-[#3eb575] text-gray-900 dark:text-white'
+                                                : 'bg-white dark:bg-[#2e2e2e] text-gray-800 dark:text-gray-200'
+                                            }`}>
+                                            <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-100 [&_pre]:dark:bg-gray-800 [&_pre]:rounded-md [&_pre]:p-2.5 [&_pre]:overflow-x-auto [&_pre]:text-xs [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_table]:text-xs [&_a]:text-blue-500">
+                                                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                                                    {msg.content}
+                                                </ReactMarkdown>
+                                            </div>
+
+                                            {/* Tool calls */}
+                                            {msg.toolCalls && msg.toolCalls.length > 0 && (
+                                                <div className="mt-2 space-y-1">
+                                                    {msg.toolCalls.map((tc: any, i: number) => (
+                                                        <details key={i} className="group rounded bg-gray-50 dark:bg-gray-800/50 overflow-hidden">
+                                                            <summary className="flex items-center gap-1.5 text-xs px-2 py-1.5 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors">
+                                                                <ChevronRight size={10} className="group-open:rotate-90 transition-transform text-gray-400 shrink-0" />
+                                                                <Wrench size={10} className="text-violet-500 shrink-0" />
+                                                                <span className="font-mono text-xs">{tc.name}</span>
+                                                                <span className={`ml-auto text-[10px] ${tc.status === 'done' ? 'text-green-500' : 'text-red-500'}`}>
+                                                                    {tc.status === 'done' ? '✓' : '✗'}
+                                                                </span>
+                                                            </summary>
+                                                            <div className="px-2 pb-1.5 text-[11px] font-mono text-gray-500 whitespace-pre-wrap max-h-32 overflow-y-auto border-t border-gray-200 dark:border-gray-700">
+                                                                {tc.result?.slice(0, 500) || '(no result)'}
+                                                                {tc.result && tc.result.length > 500 && <span className="text-gray-300">...</span>}
+                                                            </div>
+                                                        </details>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* Confirm buttons */}
+                                            {msg.pendingConfirm && (
+                                                <div className="mt-2 flex gap-2">
+                                                    <button
+                                                        className="px-3 py-1 text-xs bg-[#07c160] text-white rounded transition-colors hover:bg-[#06ad56]"
+                                                        onClick={() => confirmToolExecution(activeChatId!, msg.id)}
+                                                    >
+                                                        <Check size={12} className="inline mr-1" />{t('chat.confirm', '确认')}
+                                                    </button>
+                                                    <button className="px-3 py-1 text-xs bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded transition-colors hover:bg-gray-300">
+                                                        <X size={12} className="inline mr-1" />{t('chat.cancel', '取消')}
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
-                                    )}
+                                    </div>
                                 </div>
                             ))}
                             {loading.chat && (
-                                <div className="flex gap-3 items-start">
-                                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center shrink-0">
-                                        <Bot size={15} className="text-white" />
+                                <div className="flex gap-3">
+                                    <div className="w-9 h-9 rounded-md bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center shrink-0">
+                                        <Bot size={16} className="text-white" />
                                     </div>
-                                    <div className="bg-base-200/60 rounded-2xl px-4 py-3">
-                                        <span className="loading loading-dots loading-sm"></span>
+                                    <div className="relative">
+                                        <div className="absolute top-3 -left-1 w-2 h-2 rotate-45 bg-white dark:bg-[#2e2e2e]" />
+                                        <div className="bg-white dark:bg-[#2e2e2e] rounded-md px-4 py-3 relative">
+                                            <span className="loading loading-dots loading-sm text-gray-400"></span>
+                                        </div>
                                     </div>
                                 </div>
                             )}
                             <div ref={messagesEndRef} />
                         </div>
 
-                        {/* Bottom input */}
-                        <div className="px-6 pb-4 pt-2">
-                            <div className="flex gap-2 items-end max-w-4xl mx-auto bg-base-100 border border-base-200/60 rounded-2xl px-4 py-3 shadow-sm">
+                        {/* Input area — WeChat style */}
+                        <div className="border-t border-black/5 dark:border-white/5 bg-[#f5f5f5] dark:bg-[#1e1e1e]">
+                            <div className="px-5 py-3">
                                 <textarea
-                                    className="flex-1 bg-transparent resize-none border-0 outline-none text-sm placeholder:text-base-content/30 min-h-[24px] max-h-32"
-                                    placeholder={t('chat.input_placeholder', 'Ask me anything...')}
+                                    className="w-full bg-white dark:bg-[#2e2e2e] rounded-md border-0 outline-none resize-none text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-400 px-3 py-2.5 min-h-[80px] max-h-[160px]"
+                                    placeholder={t('chat.input_placeholder', '输入消息...')}
                                     value={input}
                                     onChange={(e) => setInput(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    rows={1}
+                                    rows={3}
                                 />
-                                <button
-                                    className="btn btn-primary btn-sm btn-circle shrink-0"
-                                    onClick={handleSend}
-                                    disabled={!input.trim() || loading.chat}
-                                >
-                                    <Send size={14} />
-                                </button>
-                            </div>
-                            <div className="text-center mt-2">
-                                <span className="text-xs text-base-content/25">
-                                    {t('chat.ai_disclaimer', 'Content is generated by AI for reference only.')}
-                                </span>
+                                <div className="flex justify-end mt-2">
+                                    <button
+                                        className="px-4 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] disabled:bg-gray-300 disabled:dark:bg-gray-600 text-white rounded transition-colors"
+                                        onClick={handleSend}
+                                        disabled={!input.trim() || loading.chat}
+                                    >
+                                        {t('chat.send', '发送')}(S)
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </>
