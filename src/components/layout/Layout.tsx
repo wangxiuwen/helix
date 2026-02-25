@@ -170,7 +170,7 @@ function Layout() {
             </div>
 
             {/* Main content */}
-            <main className="flex-1 overflow-hidden flex">
+            <main className="flex-1 overflow-hidden flex pt-9">
                 <Outlet />
             </main>
 
