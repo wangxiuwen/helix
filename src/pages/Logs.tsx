@@ -1,143 +1,136 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Activity, Search, Trash2, ArrowLeft } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Search, Trash2, AlertTriangle, Info, Bug } from 'lucide-react';
 
 interface LogEntry {
     id: number;
-    timestamp: number;
     level: string;
-    target: string;
     message: string;
-    fields: Record<string, string>;
+    timestamp: string;
+    target: string;
 }
 
 function Logs() {
-    const navigate = useNavigate();
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [search, setSearch] = useState('');
     const [levelFilter, setLevelFilter] = useState('all');
     const bottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        // Enable the debug console bridge and fetch buffered logs
-        invoke('enable_debug_console').catch(() => { });
-        invoke<LogEntry[]>('get_debug_console_logs').then((buffered) => {
-            if (buffered && buffered.length > 0) setLogs(buffered);
-        }).catch(() => { });
-
-        // Listen for new log events from the Rust backend
+        invoke<LogEntry[]>('logs_get_all').then(setLogs).catch(console.error);
         const unlisten = listen<LogEntry>('log-event', (event) => {
-            setLogs((prev) => {
-                const next = [...prev, event.payload];
-                return next.length > 2000 ? next.slice(-2000) : next;
-            });
+            setLogs(prev => [...prev, event.payload]);
         });
-
-        return () => {
-            unlisten.then((fn) => fn());
-        };
+        return () => { unlisten.then(fn => fn()); };
     }, []);
 
-    // Auto-scroll to bottom when new logs arrive
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [logs.length]);
+    }, [logs]);
 
-    const filtered = logs.filter((log) => {
-        const matchSearch = !search || log.message.toLowerCase().includes(search.toLowerCase()) || log.target.toLowerCase().includes(search.toLowerCase());
-        const matchLevel = levelFilter === 'all' || log.level.toLowerCase() === levelFilter;
-        return matchSearch && matchLevel;
+    const handleClear = async () => {
+        try {
+            await invoke('logs_clear');
+            setLogs([]);
+        } catch (e) { console.error(e); }
+    };
+
+    const filtered = logs.filter(log => {
+        if (levelFilter !== 'all' && log.level.toLowerCase() !== levelFilter) return false;
+        if (search && !log.message.toLowerCase().includes(search.toLowerCase()) && !log.target.toLowerCase().includes(search.toLowerCase())) return false;
+        return true;
     });
 
-    const handleClear = () => {
-        invoke('clear_debug_console_logs').catch(() => { });
-        setLogs([]);
+    const levelIcon = (level: string) => {
+        switch (level.toLowerCase()) {
+            case 'error': return <AlertTriangle size={12} className="text-red-400 shrink-0" />;
+            case 'warn': return <AlertTriangle size={12} className="text-yellow-400 shrink-0" />;
+            case 'debug': return <Bug size={12} className="text-gray-400 shrink-0" />;
+            default: return <Info size={12} className="text-[#07c160] shrink-0" />;
+        }
     };
 
-    const levelColors: Record<string, { dot: string; badge: string }> = {
-        INFO: { dot: 'bg-blue-500', badge: 'bg-blue-500/10 text-blue-500' },
-        WARN: { dot: 'bg-amber-500', badge: 'bg-amber-500/10 text-amber-500' },
-        ERROR: { dot: 'bg-red-500', badge: 'bg-red-500/10 text-red-500' },
-        DEBUG: { dot: 'bg-gray-400', badge: 'bg-gray-400/10 text-gray-500' },
-        TRACE: { dot: 'bg-gray-300', badge: 'bg-gray-300/10 text-gray-400' },
-    };
-
-    const formatTime = (ts: number) => {
-        const d = new Date(ts);
-        return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const levelColor = (level: string) => {
+        switch (level.toLowerCase()) {
+            case 'error': return 'text-red-400';
+            case 'warn': return 'text-yellow-500';
+            case 'debug': return 'text-gray-400';
+            default: return 'text-[#07c160]';
+        }
     };
 
     return (
-        <div className="p-6 space-y-4 overflow-y-auto h-full flex flex-col">
-            <div className="flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-3">
-                    <button
-                        onClick={() => navigate('/')}
-                        className="p-1.5 rounded-lg hover:bg-base-200 transition-colors text-base-content/50"
-                        title="返回对话"
-                    >
-                        <ArrowLeft size={20} />
-                    </button>
-                    <div>
-                        <h1 className="text-2xl font-bold text-base-content">系统日志</h1>
-                        <p className="text-sm text-base-content/60 mt-1">实时后端日志 · 共 {logs.length} 条</p>
+        <>
+            {/* Left: Filter panel */}
+            <div className="w-[250px] shrink-0 bg-[#f7f7f7] dark:bg-[#252525] flex flex-col border-r border-black/5 dark:border-white/5">
+                <div className="px-3 pt-4 pb-2">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-400">共 {logs.length} 条日志</span>
+                        <button onClick={handleClear} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-red-400" title="清空"><Trash2 className="w-3.5 h-3.5" /></button>
+                    </div>
+                    <div className="relative mb-2">
+                        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索日志..."
+                            className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400" />
                     </div>
                 </div>
-                <button className="btn btn-ghost btn-sm gap-2 text-red-500" onClick={handleClear}>
-                    <Trash2 size={16} />清空
-                </button>
+
+                {/* Level filters */}
+                <div className="px-3 pb-3 space-y-0.5">
+                    {[
+                        { key: 'all', label: '全部', count: logs.length },
+                        { key: 'info', label: 'Info', count: logs.filter(l => l.level.toLowerCase() === 'info').length },
+                        { key: 'warn', label: 'Warn', count: logs.filter(l => l.level.toLowerCase() === 'warn').length },
+                        { key: 'error', label: 'Error', count: logs.filter(l => l.level.toLowerCase() === 'error').length },
+                        { key: 'debug', label: 'Debug', count: logs.filter(l => l.level.toLowerCase() === 'debug').length },
+                    ].map(item => (
+                        <button
+                            key={item.key}
+                            onClick={() => setLevelFilter(item.key)}
+                            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${levelFilter === item.key
+                                ? 'bg-white dark:bg-[#383838] text-gray-800 dark:text-white font-medium'
+                                : 'text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5'
+                                }`}
+                        >
+                            <span>{item.label}</span>
+                            <span className="text-[10px] text-gray-400">{item.count}</span>
+                        </button>
+                    ))}
+                </div>
+
+                <div className="flex-1" />
             </div>
 
-            <div className="space-y-3 shrink-0">
-                <label className="input input-bordered input-sm flex items-center gap-2 w-full max-w-md">
-                    <Search size={16} className="text-base-content/40" />
-                    <input type="text" placeholder="搜索日志..." value={search} onChange={(e) => setSearch(e.target.value)} className="grow" />
-                </label>
-                <div className="flex gap-2">
-                    {['all', 'info', 'warn', 'error', 'debug'].map((level) => {
-                        const isActive = levelFilter === level;
-                        const colors: Record<string, string> = {
-                            all: isActive ? 'bg-base-content text-base-100' : '',
-                            info: isActive ? 'bg-blue-500 text-white' : '',
-                            warn: isActive ? 'bg-amber-500 text-white' : '',
-                            error: isActive ? 'bg-red-500 text-white' : '',
-                            debug: isActive ? 'bg-gray-500 text-white' : '',
-                        };
-                        return (
-                            <button key={level}
-                                className={`px-3 py-1 text-xs rounded-full transition-colors ${isActive ? colors[level] : 'bg-base-200 text-base-content/60 hover:bg-base-300'}`}
-                                onClick={() => setLevelFilter(level)}>
-                                {level === 'all' ? '全部' : level.toUpperCase()}
-                            </button>
-                        );
-                    })}
+            {/* Right: Log stream */}
+            <div className="flex-1 flex flex-col min-w-0 bg-[#f5f5f5] dark:bg-[#1e1e1e]">
+                <div className="h-14 px-5 flex items-center border-b border-black/5 dark:border-white/5 shrink-0">
+                    <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200">系统日志</h3>
+                    <span className="text-xs text-gray-400 ml-2">实时</span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto font-mono text-xs">
+                    {filtered.length === 0 ? (
+                        <div className="flex items-center justify-center h-full text-gray-400 text-sm">暂无日志</div>
+                    ) : (
+                        <div className="p-3 space-y-0.5">
+                            {filtered.map((log) => (
+                                <div key={log.id} className="flex items-start gap-2 px-2 py-1 rounded hover:bg-white/50 dark:hover:bg-white/5 transition-colors">
+                                    {levelIcon(log.level)}
+                                    <span className="text-[10px] text-gray-400 shrink-0 w-[52px]">
+                                        {new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                                    </span>
+                                    <span className={`text-[10px] font-bold uppercase w-[36px] shrink-0 ${levelColor(log.level)}`}>{log.level.slice(0, 4)}</span>
+                                    <span className="text-[10px] text-gray-400 shrink-0 max-w-[120px] truncate">{log.target}</span>
+                                    <span className="text-[11px] text-gray-600 dark:text-gray-300 break-all">{log.message}</span>
+                                </div>
+                            ))}
+                            <div ref={bottomRef} />
+                        </div>
+                    )}
                 </div>
             </div>
-
-            {filtered.length === 0 ? (
-                <div className="text-center py-16 text-base-content/40 flex-1 flex flex-col items-center justify-center">
-                    <Activity size={48} className="mb-3 opacity-30" />
-                    <p>暂无日志</p>
-                </div>
-            ) : (
-                <div className="flex-1 overflow-y-auto font-mono text-xs space-y-px bg-base-200/30 rounded-xl p-2">
-                    {filtered.map((log) => {
-                        const lc = levelColors[log.level] || levelColors.DEBUG;
-                        return (
-                            <div key={log.id} className={`flex items-start gap-2 px-2 py-1 rounded hover:bg-base-200/50 ${log.level === 'ERROR' ? 'bg-red-500/5' : ''}`}>
-                                <span className="text-base-content/40 shrink-0 w-16">{formatTime(log.timestamp)}</span>
-                                <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${lc.badge}`}>{log.level}</span>
-                                <span className="text-base-content/40 shrink-0 max-w-[140px] truncate">{log.target}</span>
-                                <span className="text-base-content break-all">{log.message}</span>
-                            </div>
-                        );
-                    })}
-                    <div ref={bottomRef} />
-                </div>
-            )}
-        </div>
+        </>
     );
 }
 
