@@ -1,6 +1,6 @@
 //! Embedded HTTP API Server with Swagger UI.
 //!
-//! Provides RESTful endpoints for agent chat, tool testing, WeChat messaging,
+//! Provides RESTful endpoints for agent chat, tool testing,
 //! and health checks. Serves Swagger UI at /swagger-ui/.
 
 use axum::{
@@ -32,9 +32,6 @@ use crate::modules::database;
         tool_web_search,
         tool_web_fetch,
         tool_shell_exec,
-        wechat_send,
-        wechat_messages,
-        wechat_sessions,
     ),
     components(schemas(
         HealthResponse,
@@ -44,14 +41,11 @@ use crate::modules::database;
         ToolFetchRequest,
         ToolShellRequest,
         ToolResponse,
-        WechatSendRequest,
-        WechatSendResponse,
     )),
     tags(
         (name = "health", description = "Health check"),
         (name = "agent", description = "AI Agent chat"),
         (name = "tools", description = "Direct tool invocation"),
-        (name = "wechat", description = "WeChat File Transfer Assistant"),
     )
 )]
 struct ApiDoc;
@@ -121,20 +115,7 @@ struct ToolResponse {
     error: Option<String>,
 }
 
-#[derive(Deserialize, ToSchema)]
-struct WechatSendRequest {
-    /// Session ID
-    session_id: String,
-    /// Message content
-    content: String,
-}
 
-#[derive(Serialize, ToSchema)]
-struct WechatSendResponse {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
 
 // ============================================================================
 // Endpoints
@@ -286,64 +267,7 @@ async fn tool_shell_exec(Json(req): Json<ToolShellRequest>) -> Json<ToolResponse
     }
 }
 
-/// Send a message via WeChat File Transfer Assistant
-#[utoipa::path(
-    post, path = "/api/wechat/send",
-    tag = "wechat",
-    request_body = WechatSendRequest,
-    responses(
-        (status = 200, description = "Message sent", body = WechatSendResponse),
-    )
-)]
-async fn wechat_send(Json(req): Json<WechatSendRequest>) -> Json<WechatSendResponse> {
-    info!("[API] wechat_send: session={}, content_len={}", req.session_id, req.content.len());
 
-    match crate::modules::filehelper::send_text_message(&req.session_id, &req.content, false).await {
-        Ok(_) => Json(WechatSendResponse { ok: true, error: None }),
-        Err(e) => Json(WechatSendResponse { ok: false, error: Some(e) }),
-    }
-}
-
-/// Get message history for a WeChat session
-#[utoipa::path(
-    get, path = "/api/wechat/messages",
-    tag = "wechat",
-    params(
-        ("session_id" = String, Query, description = "WeChat session ID"),
-        ("limit" = Option<i64>, Query, description = "Max messages to return"),
-    ),
-    responses(
-        (status = 200, description = "Message list", body = Value),
-    )
-)]
-async fn wechat_messages(
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Json<Value> {
-    let session_id = params.get("session_id").cloned().unwrap_or_default();
-    let limit = params.get("limit")
-        .and_then(|l| l.parse::<i64>().ok())
-        .unwrap_or(50);
-
-    match database::get_messages(&session_id, limit, 0) {
-        Ok(msgs) => Json(json!({ "messages": msgs, "count": msgs.len() })),
-        Err(e) => Json(json!({ "error": e, "messages": [] })),
-    }
-}
-
-/// List all WeChat sessions
-#[utoipa::path(
-    get, path = "/api/wechat/sessions",
-    tag = "wechat",
-    responses(
-        (status = 200, description = "Session list", body = Value),
-    )
-)]
-async fn wechat_sessions() -> Json<Value> {
-    match crate::modules::filehelper::filehelper_list_sessions().await {
-        Ok(v) => Json(v),
-        Err(e) => Json(json!({ "error": e })),
-    }
-}
 
 // ============================================================================
 // Server Startup
@@ -363,12 +287,7 @@ pub fn start_api_server(port: u16) {
             .route("/api/tools/web_search", post(tool_web_search))
             .route("/api/tools/web_fetch", post(tool_web_fetch))
             .route("/api/tools/shell_exec", post(tool_shell_exec))
-            // WeChat
-            .route("/api/wechat/send", post(wechat_send))
-            .route("/api/wechat/messages", get(wechat_messages))
-            .route("/api/wechat/sessions", get(wechat_sessions))
-            // TG Bot API compatible endpoints
-            .merge(crate::modules::filehelper::bot_api_routes())
+
             // Swagger UI
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
             // CORS

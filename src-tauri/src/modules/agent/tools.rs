@@ -171,11 +171,6 @@ pub async fn execute_tool(name: &str, args: &Value, ctx: Option<&str>) -> Result
             let text = args["text"].as_str().unwrap_or("");
             crate::modules::browser_engine::BrowserSession::fill(ref_id, text).await
         }
-        "wechat_send_file" => {
-            let file_path = args["file_path"].as_str().ok_or("Missing 'file_path'")?;
-            let session_id = ctx.ok_or("No WeChat session context available")?;
-            crate::modules::filehelper::send_file_to_wechat(session_id, file_path).await
-        }
         _ => {
             let registry = crate::modules::plugins::PluginRegistry::load_plugins().await;
             if let Some(plugin_path) = registry.tools.get(name) {

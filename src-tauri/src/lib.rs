@@ -210,17 +210,8 @@ pub fn run() {
             // Start cron job scheduler
             modules::cron::start_cron_scheduler();
 
-            // Start WeChat background polling (independent of frontend)
-            modules::filehelper::start_background_polling();
-
-            // Start heartbeat monitor for auto-reconnect detection
-            modules::filehelper::bot_api::start_heartbeat_monitor();
-
             // Start embedded HTTP API server with Swagger UI
             modules::api_server::start_api_server(9520);
-
-            // Start Feishu gateway if configured
-            modules::feishu::start_feishu_if_enabled();
 
             Ok(())
         })
@@ -283,17 +274,7 @@ pub fn run() {
             // K8s / Aliyun config commands
             commands::get_kube_info,
             commands::get_aliyun_info,
-            // WeChat File Helper commands
-            modules::filehelper::filehelper_create_session,
-            modules::filehelper::filehelper_list_sessions,
-            modules::filehelper::filehelper_get_qr,
-            modules::filehelper::filehelper_check_login,
-            modules::filehelper::filehelper_status,
-            modules::filehelper::filehelper_send_msg,
-            modules::filehelper::filehelper_send_file,
-            modules::filehelper::filehelper_poll_messages,
-            modules::filehelper::filehelper_get_messages,
-            modules::filehelper::filehelper_logout,
+
             // AI Chat commands
             modules::ai_chat::ai_chat_send,
             modules::ai_chat::ai_get_config,
@@ -408,15 +389,7 @@ pub fn run() {
             // Subagents
             modules::subagents::spawn_subagent,
             modules::subagents::spawn_subagents_batch,
-            // Feishu commands
-            modules::feishu::feishu_get_config,
-            modules::feishu::feishu_save_config,
-            modules::feishu::feishu_connect,
-            modules::feishu::feishu_disconnect,
-            modules::feishu::feishu_get_status,
-            modules::feishu::feishu_send_message,
-            modules::feishu::feishu_send_to_user,
-            modules::feishu::feishu_test_connection,
+
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

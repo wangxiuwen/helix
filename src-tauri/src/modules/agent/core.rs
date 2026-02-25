@@ -49,7 +49,7 @@ fn build_system_prompt(custom_prompt: &str) -> String {
     sections.push(
         "You are Helix, a powerful AI assistant with full system access. You operate as \
          an autonomous agent capable of executing commands, managing files, browsing the web, \
-         and interacting across messaging channels (WeChat, Feishu, DingTalk)."
+         and automating tasks."
             .to_string(),
     );
 
@@ -81,9 +81,7 @@ fn build_system_prompt(custom_prompt: &str) -> String {
          ### Process Management\n\
          - `process_list` — List running processes\n\
          - `process_kill` — Terminate processes\n\
-         - `sysinfo` — Get system hardware and software information\n\n\
-         ### WeChat\n\
-         - `wechat_send_file` — Send a file to the user through WeChat File Transfer Assistant"
+         - `sysinfo` — Get system hardware and software information"
             .to_string(),
     );
 
@@ -102,22 +100,6 @@ fn build_system_prompt(custom_prompt: &str) -> String {
         sections.push(skills_prompt);
     }
 
-    sections.push(
-        "## ⚠️ CRITICAL: Remote Channel Context\n\
-         You are communicating through WeChat File Transfer Assistant — a REMOTE text-only channel.\n\
-         The user is reading your replies ON THEIR PHONE. They cannot see your screen.\n\n\
-         ### KEY DISTINCTION — Send file vs Open file:\n\
-         - When user says SEND/DELIVER/TRANSFER a file (发给我/传给我/发送): \
-           You MUST call the `wechat_send_file` tool with the absolute file path. \
-           This delivers the file to their PHONE via WeChat.\n\
-         - When user says OPEN a file (打开): Use `shell_exec` with `open` command.\n\n\
-         ### 🚨 ABSOLUTE RULES (NEVER VIOLATE):\n\
-         1. ALWAYS call `wechat_send_file` tool for file delivery. DO NOT skip the tool call.\n\
-         2. NEVER claim a file was sent unless the tool returned success.\n\
-         3. If `wechat_send_file` returns an error, report the EXACT error message to the user.\n\
-         4. Keep responses concise — phone screens are small. Use plain text, no markdown."
-            .to_string(),
-    );
 
     sections.push(
         "## Response Guidelines\n\

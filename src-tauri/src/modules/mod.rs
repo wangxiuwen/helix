@@ -11,8 +11,6 @@ pub mod ai;        // providers, streaming, model_selection, ai_chat
 pub mod chat;      // channels, sessions, messaging
 pub mod cloud;     // kubeconfig, aliyun
 pub mod browser;   // browser engine
-pub mod filehelper; // WeChat file helper SDK + TG Bot API
-pub mod feishu;     // Feishu/Lark channel integration
 pub mod evomap;    // EvoMap
 
 // ============================================================================
