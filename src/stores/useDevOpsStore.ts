@@ -442,7 +442,7 @@ export const useDevOpsStore = create<helixState>()(
                 } catch (err: any) {
                     const errorMsg: ChatMessage = {
                         id: generateId(), role: 'assistant',
-                        content: `❌ 请求失败: ${err.message || '未知错误'}`,
+                        content: `❌ 请求失败: ${typeof err === 'string' ? err : err?.message || JSON.stringify(err)}`,
                         timestamp: new Date().toISOString(),
                     };
                     set((s) => ({
