@@ -68,9 +68,15 @@ fn kill_process_tree(root_pid: u32) {
 pub async fn exec_sandboxed(command: &str, working_dir: &str, opts: SandboxOptions) -> Result<SandboxResult, String> {
     info!("Sandbox executing: {} (dir: {})", &command[..command.len().min(50)], working_dir);
 
-    let mut child = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    // Use login shell to inherit user's full PATH (e.g., for aliyun, kubectl, etc.)
+    let (shell, shell_args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
+        ("zsh", vec!["-l", "-c", command])
+    } else {
+        ("sh", vec!["-c", command])
+    };
+
+    let mut child = tokio::process::Command::new(shell)
+        .args(&shell_args)
         .current_dir(working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

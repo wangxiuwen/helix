@@ -167,6 +167,20 @@ fn build_ping_frame(service_id: &str) -> Vec<u8> {
     encode_frame(&frame)
 }
 
+/// Build a protobuf ack frame to acknowledge a data frame.
+/// Without this ack, the server will keep retransmitting the same event.
+fn build_ack_frame(service_id: &str) -> Vec<u8> {
+    let ack_payload = b"{\"code\":200}";
+    let frame = PbFrame {
+        service: service_id.parse::<i32>().unwrap_or(0),
+        method: 1, // data
+        headers: vec![("type".to_string(), "event".to_string())],
+        payload: ack_payload.to_vec(),
+        ..Default::default()
+    };
+    encode_frame(&frame)
+}
+
 // ============================================================================
 // Event types
 // ============================================================================
@@ -397,6 +411,13 @@ async fn run_ws_connection(abort_rx: &mut watch::Receiver<bool>) -> Result<(), S
                             1 => {
                                 // Data frame — payload contains event JSON
                                 info!("[Feishu] Data frame: method=1, headers={:?}, payload_len={}", frame.headers, frame.payload.len());
+
+                                // Send ack immediately to stop server retransmission
+                                let ack_data = build_ack_frame(&service_id);
+                                if let Err(e) = ws_sink.send(Message::Binary(ack_data)).await {
+                                    warn!("[Feishu] Failed to send ack: {}", e);
+                                }
+
                                 let payload_str = if frame.payload_encoding == "gzip" {
                                     use std::io::Read;
                                     let mut decoder = flate2::read::GzDecoder::new(&frame.payload[..]);

@@ -213,15 +213,27 @@ async fn tool_shell_exec(args: &Value) -> Result<String, String> {
         });
     let timeout = args["timeout_secs"].as_u64().unwrap_or(30);
 
+    // Use login shell to inherit user's full PATH
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(timeout),
-        tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(&working_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output(),
+        if cfg!(target_os = "macos") {
+            tokio::process::Command::new("zsh")
+                .arg("-l")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(&working_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+        } else {
+            tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(&working_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+        },
     )
     .await
     .map_err(|_| format!("Command timed out after {}s", timeout))?
