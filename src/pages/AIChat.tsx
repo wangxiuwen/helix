@@ -167,7 +167,7 @@ function AIChat() {
                         <div className="h-14 px-5 flex items-center border-b border-black/5 dark:border-white/5 shrink-0">
                             <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{activeSession.title}</h3>
                         </div>
-                        <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
+                        <div className="flex-1 overflow-y-auto px-2 py-5 space-y-5">
                             {activeSession.messages.length === 0 && (
                                 <div className="text-center py-12 text-gray-400">
                                     <Bot size={40} className="mx-auto mb-3 opacity-30" />
