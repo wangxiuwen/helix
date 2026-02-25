@@ -4,7 +4,7 @@ import { executeTool, setSkillEnabled, addCustomSkill as addSkillToRegistry, rem
 import { invoke } from '@tauri-apps/api/core';
 
 function syncAIProviderToBackend(providers: AIProvider[]) {
-    if (typeof window === 'undefined' || !(window as any).__TAURI__) return;
+    if (typeof window === 'undefined') return;
     const active = providers.find(p => p.enabled);
     if (!active) return;
 

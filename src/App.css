@@ -115,6 +115,36 @@ a {
   color: white;
 }
 
+/* Light mode code block fix (github-dark.css only covers dark) */
+:not(.dark) pre {
+  background-color: #f6f8fa !important;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+:not(.dark) pre code {
+  color: #24292e !important;
+  background-color: transparent !important;
+}
+
+:not(.dark) code {
+  background-color: #f0f0f0;
+  color: #d63384;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.875em;
+}
+
+:not(.dark) pre code .hljs-keyword { color: #d73a49 !important; }
+:not(.dark) pre code .hljs-string { color: #032f62 !important; }
+:not(.dark) pre code .hljs-comment { color: #6a737d !important; }
+:not(.dark) pre code .hljs-function,
+:not(.dark) pre code .hljs-title { color: #6f42c1 !important; }
+:not(.dark) pre code .hljs-number { color: #005cc5 !important; }
+:not(.dark) pre code .hljs-built_in { color: #e36209 !important; }
+:not(.dark) pre code .hljs-attr { color: #005cc5 !important; }
+:not(.dark) pre code .hljs-params { color: #24292e !important; }
+
 /* Arabic Fonts - Effra */
 @font-face {
   font-family: 'Effra';
