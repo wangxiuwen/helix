@@ -115,6 +115,44 @@ a {
   color: white;
 }
 
+/* Light mode: override highlight.js github-dark theme for readable code blocks */
+html:not(.dark) pre {
+  background-color: #f5f5f5 !important;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+}
+
+html:not(.dark) pre code {
+  color: #1f2937 !important;
+  background-color: transparent !important;
+}
+
+html:not(.dark) code {
+  color: #d63384;
+  background-color: #f8f0f4;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+html:not(.dark) pre code {
+  color: #1f2937 !important;
+  padding: 0;
+}
+
+/* highlight.js token overrides for light mode */
+html:not(.dark) .hljs-keyword { color: #8250df !important; }
+html:not(.dark) .hljs-string { color: #0a3069 !important; }
+html:not(.dark) .hljs-comment { color: #6e7781 !important; }
+html:not(.dark) .hljs-function { color: #8250df !important; }
+html:not(.dark) .hljs-number { color: #0550ae !important; }
+html:not(.dark) .hljs-title { color: #953800 !important; }
+html:not(.dark) .hljs-built_in { color: #0550ae !important; }
+html:not(.dark) .hljs-variable { color: #953800 !important; }
+html:not(.dark) .hljs-attr { color: #0550ae !important; }
+html:not(.dark) .hljs-params { color: #24292f !important; }
+html:not(.dark) .hljs-meta { color: #0550ae !important; }
+
 /* Arabic Fonts - Effra */
 @font-face {
   font-family: 'Effra';

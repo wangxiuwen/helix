@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { getToolsForAI, executeTool, findTool, setSkillEnabled, addCustomSkill as addSkillToRegistry, removeCustomSkill as removeSkillFromRegistry, syncSkillStates, loadCustomSkills, buildSkillsPrompt, ToolLoopDetector, loadAllAgentSkills, buildAgentSkillsPrompt, type OpsSkill, type ToolParameter, type ToolEvent, type AgentSkill } from '../services/opsTools';
+import { executeTool, setSkillEnabled, addCustomSkill as addSkillToRegistry, removeCustomSkill as removeSkillFromRegistry, syncSkillStates, loadCustomSkills, loadAllAgentSkills, type OpsSkill, type ToolParameter, type AgentSkill } from '../services/opsTools';
 import { invoke } from '@tauri-apps/api/core';
 
 function syncAIProviderToBackend(providers: AIProvider[]) {
-    if (typeof window === 'undefined' || !(window as any).__TAURI__) return;
+    if (typeof window === 'undefined') return;
     const active = providers.find(p => p.enabled);
     if (!active) return;
 
@@ -226,7 +226,8 @@ function generateId() {
 
 // ========== AI call with function calling ==========
 
-async function callAI(
+// @ts-ignore: kept for future use
+async function _callAI(
     provider: AIProvider,
     messages: Array<{ role: string; content: string }>,
     tools?: any[]
@@ -442,7 +443,7 @@ export const useDevOpsStore = create<helixState>()(
                 } catch (err: any) {
                     const errorMsg: ChatMessage = {
                         id: generateId(), role: 'assistant',
-                        content: `❌ 请求失败: ${err.message || '未知错误'}`,
+                        content: `❌ 请求失败: ${typeof err === 'string' ? err : err.message || JSON.stringify(err)}`,
                         timestamp: new Date().toISOString(),
                     };
                     set((s) => ({
