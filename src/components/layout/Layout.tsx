@@ -1,6 +1,5 @@
 import { Outlet } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import Navbar from '../navbar/Navbar';
 import ToastContainer from '../common/ToastContainer';
 import { isTauri } from '../../utils/env';
 
@@ -25,8 +24,7 @@ function Layout() {
                 />
             )}
             <ToastContainer />
-            <Navbar />
-            <main className="flex-1 overflow-hidden flex flex-col relative">
+            <main className="flex-1 overflow-hidden flex flex-col relative pt-9">
                 <Outlet />
             </main>
         </div>
