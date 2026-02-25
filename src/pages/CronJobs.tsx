@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Clock, Play, Plus, Trash2, Pause, History, Bell, RefreshCw, ChevronDown, ChevronUp, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Clock, Play, Plus, Trash2, Pause, History, Bell, RefreshCw, ChevronDown, ChevronUp, CheckCircle, XCircle, Loader2, ArrowLeft } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { useNavigate } from 'react-router-dom';
 
 interface CronTask {
     id: string;
@@ -28,6 +29,7 @@ interface CronRun {
 }
 
 function CronJobs() {
+    const navigate = useNavigate();
     const [tasks, setTasks] = useState<CronTask[]>([]);
     const [loading, setLoading] = useState(true);
     const [showAdd, setShowAdd] = useState(false);
@@ -153,9 +155,18 @@ function CronJobs() {
     return (
         <div className="p-6 space-y-6 overflow-y-auto h-full max-w-4xl mx-auto">
             <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold text-base-content">定时任务</h1>
-                    <p className="text-sm text-base-content/60 mt-1">管理定时执行的自动化任务（后端持久化）</p>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => navigate('/')}
+                        className="p-1.5 rounded-lg hover:bg-base-200 transition-colors text-base-content/50"
+                        title="返回对话"
+                    >
+                        <ArrowLeft size={20} />
+                    </button>
+                    <div>
+                        <h1 className="text-2xl font-bold text-base-content">定时任务</h1>
+                        <p className="text-sm text-base-content/60 mt-1">管理定时执行的自动化任务（后端持久化）</p>
+                    </div>
                 </div>
                 <div className="flex gap-2">
                     <button className="btn btn-ghost btn-sm" onClick={loadTasks} title="刷新">

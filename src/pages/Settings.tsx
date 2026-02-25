@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Eye, EyeOff, Globe, Moon, Palette, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react';
+import { ArrowLeft, Bot, Eye, EyeOff, Globe, Moon, Palette, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useDevOpsStore, AIProvider } from '../stores/useDevOpsStore';
 import { useConfigStore } from '../stores/useConfigStore';
 
@@ -15,6 +16,7 @@ const MENU_ITEMS: Array<{ key: SettingsSection; icon: typeof Palette; label: str
 
 
 function Settings() {
+    const navigate = useNavigate();
     const { i18n } = useTranslation();
     const {
         aiProviders, updateAIProvider, addAIProvider, removeAIProvider,
@@ -202,6 +204,13 @@ function Settings() {
             <aside className="w-56 shrink-0 border-r border-base-200 bg-base-100 overflow-y-auto">
                 <div className="p-4 pb-2">
                     <h1 className="text-lg font-bold text-base-content flex items-center gap-2">
+                        <button
+                            onClick={() => navigate('/')}
+                            className="p-1 rounded-lg hover:bg-base-200 transition-colors text-base-content/50"
+                            title="返回对话"
+                        >
+                            <ArrowLeft size={18} />
+                        </button>
                         <SettingsIcon size={20} />
                         设置
                     </h1>

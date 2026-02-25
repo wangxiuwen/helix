@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Activity, Search, Trash2 } from 'lucide-react';
+import { Activity, Search, Trash2, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 interface LogEntry {
     id: number;
@@ -13,6 +14,7 @@ interface LogEntry {
 }
 
 function Logs() {
+    const navigate = useNavigate();
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [search, setSearch] = useState('');
     const [levelFilter, setLevelFilter] = useState('all');
@@ -70,9 +72,18 @@ function Logs() {
     return (
         <div className="p-6 space-y-4 overflow-y-auto h-full flex flex-col">
             <div className="flex items-center justify-between shrink-0">
-                <div>
-                    <h1 className="text-2xl font-bold text-base-content">系统日志</h1>
-                    <p className="text-sm text-base-content/60 mt-1">实时后端日志 · 共 {logs.length} 条</p>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => navigate('/')}
+                        className="p-1.5 rounded-lg hover:bg-base-200 transition-colors text-base-content/50"
+                        title="返回对话"
+                    >
+                        <ArrowLeft size={20} />
+                    </button>
+                    <div>
+                        <h1 className="text-2xl font-bold text-base-content">系统日志</h1>
+                        <p className="text-sm text-base-content/60 mt-1">实时后端日志 · 共 {logs.length} 条</p>
+                    </div>
                 </div>
                 <button className="btn btn-ghost btn-sm gap-2 text-red-500" onClick={handleClear}>
                     <Trash2 size={16} />清空

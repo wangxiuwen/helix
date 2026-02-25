@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useNavigate } from 'react-router-dom';
 import {
+    ArrowLeft,
     Puzzle,
     Search,
     FolderOpen,
@@ -34,6 +36,7 @@ interface Skill {
 }
 
 export default function Skills() {
+    const navigate = useNavigate();
     const [skills, setSkills] = useState<Skill[]>([]);
     const [selected, setSelected] = useState<Skill | null>(null);
     const [search, setSearch] = useState('');
@@ -163,6 +166,13 @@ export default function Skills() {
             <div className="px-8 py-5 border-b border-gray-200/60 dark:border-base-200/60">
                 <div className="max-w-7xl mx-auto flex items-center justify-between">
                     <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => navigate('/')}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-base-200 transition-colors text-gray-500 dark:text-gray-400"
+                            title="返回对话"
+                        >
+                            <ArrowLeft className="w-5 h-5" />
+                        </button>
                         <div className="w-10 h-10 bg-gradient-to-br from-violet-400 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-purple-500/20">
                             <Puzzle className="w-5 h-5 text-white" />
                         </div>
@@ -257,8 +267,8 @@ export default function Skills() {
                                     key={skill.name}
                                     onClick={() => setSelected(skill)}
                                     className={`w-full px-4 py-3 flex items-start gap-3 text-left transition-all border-b border-gray-100/60 dark:border-base-200/40 hover:bg-white/80 dark:hover:bg-base-200/50 ${selected?.name === skill.name
-                                            ? 'bg-white dark:bg-base-200 shadow-sm border-l-2 border-l-purple-500'
-                                            : 'border-l-2 border-l-transparent'
+                                        ? 'bg-white dark:bg-base-200 shadow-sm border-l-2 border-l-purple-500'
+                                        : 'border-l-2 border-l-transparent'
                                         }`}
                                 >
                                     <span className="text-xl mt-0.5 flex-shrink-0">{skill.icon}</span>
@@ -270,8 +280,8 @@ export default function Skills() {
                                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2">{skill.description}</p>
                                         <div className="flex items-center gap-1.5 mt-1.5">
                                             <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${skill.enabled
-                                                    ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
-                                                    : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500'
+                                                ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                                                : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500'
                                                 }`}>
                                                 {skill.enabled ? '已启用' : '已禁用'}
                                             </span>
@@ -335,8 +345,8 @@ export default function Skills() {
                                 <button
                                     onClick={() => handleToggle(selected)}
                                     className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${selected.enabled
-                                            ? 'bg-green-500 hover:bg-green-600 text-white shadow-sm shadow-green-500/20'
-                                            : 'bg-gray-200 dark:bg-base-300 hover:bg-gray-300 dark:hover:bg-base-200 text-gray-700 dark:text-gray-300'
+                                        ? 'bg-green-500 hover:bg-green-600 text-white shadow-sm shadow-green-500/20'
+                                        : 'bg-gray-200 dark:bg-base-300 hover:bg-gray-300 dark:hover:bg-base-200 text-gray-700 dark:text-gray-300'
                                         }`}
                                 >
                                     {selected.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
