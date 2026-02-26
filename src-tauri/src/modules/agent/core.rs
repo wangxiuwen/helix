@@ -290,7 +290,11 @@ pub async fn agent_process_message(
     let response = agent.handle_message(&full_input, state).await
         .map_err(|e| format!("Agent error: {}", e))?;
 
-    let text = format!("{:?}", response);
+    // Extract text from AgentMessage.content
+    let text = match &response.content {
+        agents_sdk::messaging::MessageContent::Text(t) => t.clone(),
+        other => format!("{:?}", other),
+    };
     let clean = clean_response(&text);
     let _ = database::save_conversation_message(account_id, "assistant", &clean);
     emit_agent_progress("done", json!({ "chars": clean.len() }));
