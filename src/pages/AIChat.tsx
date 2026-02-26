@@ -43,6 +43,10 @@ async function fetchModelsFromProvider(provider: AIProvider): Promise<string[]> 
 const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 380;
 
+// Module-level flags to prevent React StrictMode double-mount listener duplication
+let _agentListenerActive = false;
+let _fileListenerActive = false;
+
 function AIChat() {
     const { t } = useTranslation();
     const {
@@ -97,11 +101,10 @@ function AIChat() {
     }, [activeSession?.messages, agentStatus, fileAttachments]);
 
     // Listen for agent-progress events from Rust backend
-    // Use a ref to track listener registration and prevent duplicates from React StrictMode
-    const listenerRegistered = useRef(false);
+    // Module-level flag survives React StrictMode unmount/remount
     useEffect(() => {
-        if (listenerRegistered.current) return;
-        listenerRegistered.current = true;
+        if (_agentListenerActive) return;
+        _agentListenerActive = true;
         let unlisten: (() => void) | null = null;
         const seenIds = new Set<number>();
         import('@tauri-apps/api/event').then(({ listen }) => {
@@ -125,21 +128,20 @@ function AIChat() {
                 }
             }).then(fn => { unlisten = fn; });
         });
-        return () => { unlisten?.(); listenerRegistered.current = false; };
+        return () => { unlisten?.(); _agentListenerActive = false; };
     }, []);
 
     // Listen for file-attachment events from agent
-    const fileListenerRegistered = useRef(false);
     useEffect(() => {
-        if (fileListenerRegistered.current) return;
-        fileListenerRegistered.current = true;
+        if (_fileListenerActive) return;
+        _fileListenerActive = true;
         let unlisten: (() => void) | null = null;
         import('@tauri-apps/api/event').then(({ listen }) => {
             listen<{ name: string; mime: string; size: string; path: string }>('file-attachment', (event) => {
                 setFileAttachments(prev => [...prev, { id: Date.now(), ...event.payload }]);
             }).then(fn => { unlisten = fn; });
         });
-        return () => { unlisten?.(); fileListenerRegistered.current = false; };
+        return () => { unlisten?.(); _fileListenerActive = false; };
     }, []);
 
     // Auto-fetch models from API when provider changes
@@ -488,9 +490,8 @@ function AIChat() {
                                                 onClick={async () => {
                                                     try {
                                                         const { save } = await import('@tauri-apps/plugin-dialog');
-                                                        const { copyFile } = await import('@tauri-apps/plugin-fs');
                                                         const dest = await save({ defaultPath: att.name });
-                                                        if (dest) await copyFile(att.path, dest);
+                                                        if (dest) await invoke('save_file_to', { source: att.path, destination: dest });
                                                     } catch (e) { console.error('Save failed:', e); }
                                                 }}
                                             >⬇ 另存为</button>

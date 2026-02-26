@@ -35,6 +35,15 @@ pub fn agent_cancel() {
     info!("[agent] Cancellation requested");
 }
 
+/// Copy a file from source to destination (used by file download card)
+#[tauri::command]
+pub async fn save_file_to(source: String, destination: String) -> Result<String, String> {
+    tokio::fs::copy(&source, &destination)
+        .await
+        .map_err(|e| format!("Copy failed: {}", e))?;
+    Ok(format!("Saved to {}", destination))
+}
+
 /// Emit agent progress event to frontend for real-time display
 fn emit_agent_progress(event_type: &str, data: Value) {
     let payload = json!({ "type": event_type, "data": data });

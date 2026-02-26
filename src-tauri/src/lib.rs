@@ -298,6 +298,7 @@ pub fn run() {
             // Agent commands
             modules::agent::agent_chat,
             modules::agent::agent_cancel,
+            modules::agent::save_file_to,
             modules::agent::agent_get_history,
             modules::agent::agent_clear_history,
             // Cron commands
