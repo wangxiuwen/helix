@@ -43,9 +43,41 @@ async function fetchModelsFromProvider(provider: AIProvider): Promise<string[]> 
 const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 380;
 
-// Module-level flags to prevent React StrictMode double-mount listener duplication
-let _agentListenerActive = false;
-let _fileListenerActive = false;
+// Window-level event buffer + Tauri listeners (survive unmount, HMR, StrictMode)
+declare global {
+    interface Window {
+        __helix_agent_status: string[];
+        __helix_file_attachments: Array<{ id: number; name: string; mime: string; size: string; path: string }>;
+        __helix_listeners_registered?: boolean;
+    }
+}
+if (!window.__helix_agent_status) window.__helix_agent_status = [];
+if (!window.__helix_file_attachments) window.__helix_file_attachments = [];
+
+if (!window.__helix_listeners_registered) {
+    window.__helix_listeners_registered = true;
+    import('@tauri-apps/api/event').then(({ listen }) => {
+        listen('agent-progress', (event: any) => {
+            const { type, data } = event.payload;
+            if (type === 'thinking') {
+                const msg = `🤔 思考中... (模型: ${data.model})`;
+                const arr = window.__helix_agent_status;
+                if (arr[arr.length - 1] !== msg) arr.push(msg);
+            } else if (type === 'tool_call') {
+                window.__helix_agent_status.push(`🔧 调用工具: ${data.name}`);
+            } else if (type === 'tool_result') {
+                window.__helix_agent_status.push(`✅ ${data.name} 完成 (${data.chars} 字符)`);
+            } else if (type === 'done' || type === 'cancelled') {
+                window.__helix_agent_status = [];
+            }
+            window.dispatchEvent(new Event('helix:update'));
+        });
+        listen('file-attachment', (event: any) => {
+            window.__helix_file_attachments.push({ id: Date.now(), ...event.payload });
+            window.dispatchEvent(new Event('helix:update'));
+        });
+    });
+}
 
 function AIChat() {
     const { t } = useTranslation();
@@ -91,10 +123,9 @@ function AIChat() {
         ? [currentModel, ...fetchedModels]
         : fetchedModels.length > 0 ? fetchedModels : (currentModel ? [currentModel] : []);
 
-    // Agent progress tracking
-    const [agentStatus, setAgentStatus] = useState<string[]>([]);
-    // File attachments received from agent via Tauri events
-    const [fileAttachments, setFileAttachments] = useState<Array<{ id: number; name: string; mime: string; size: string; path: string }>>([]);
+    // Agent progress & file attachments — sync from window-level buffer
+    const [agentStatus, setAgentStatus] = useState<string[]>(() => [...window.__helix_agent_status]);
+    const [fileAttachments, setFileAttachments] = useState<Array<{ id: number; name: string; mime: string; size: string; path: string }>>(() => [...window.__helix_file_attachments]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -102,44 +133,21 @@ function AIChat() {
 
     // Clear file attachments and agent status when switching conversations
     useEffect(() => {
+        window.__helix_file_attachments = [];
+        window.__helix_agent_status = [];
         setFileAttachments([]);
         setAgentStatus([]);
     }, [activeChatId]);
 
-    // Listen for agent-progress events from Rust backend
-    // One-shot registration: flag never resets, listener lives for app lifetime
+    // Sync from window buffer on mount and on every update event
     useEffect(() => {
-        if (_agentListenerActive) return;
-        _agentListenerActive = true;
-        import('@tauri-apps/api/event').then(({ listen }) => {
-            listen<{ type: string; data: any }>('agent-progress', (event) => {
-                const { type, data } = event.payload;
-                if (type === 'thinking') {
-                    setAgentStatus(prev => {
-                        const last = prev[prev.length - 1];
-                        const msg = `🤔 思考中... (模型: ${data.model})`;
-                        return last === msg ? prev : [...prev, msg];
-                    });
-                } else if (type === 'tool_call') {
-                    setAgentStatus(prev => [...prev, `🔧 调用工具: ${data.name}`]);
-                } else if (type === 'tool_result') {
-                    setAgentStatus(prev => [...prev, `✅ ${data.name} 完成 (${data.chars} 字符)`]);
-                } else if (type === 'done' || type === 'cancelled') {
-                    setAgentStatus([]);
-                }
-            });
-        });
-    }, []);
-
-    // Listen for file-attachment events from agent
-    useEffect(() => {
-        if (_fileListenerActive) return;
-        _fileListenerActive = true;
-        import('@tauri-apps/api/event').then(({ listen }) => {
-            listen<{ name: string; mime: string; size: string; path: string }>('file-attachment', (event) => {
-                setFileAttachments(prev => [...prev, { id: Date.now(), ...event.payload }]);
-            });
-        });
+        const sync = () => {
+            setAgentStatus([...window.__helix_agent_status]);
+            setFileAttachments([...window.__helix_file_attachments]);
+        };
+        sync(); // Read accumulated events on mount
+        window.addEventListener('helix:update', sync);
+        return () => window.removeEventListener('helix:update', sync);
     }, []);
 
     // Auto-fetch models from API when provider changes
