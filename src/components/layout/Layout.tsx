@@ -41,7 +41,7 @@ function Layout() {
     const [showSettings, setShowSettings] = useState(false);
     const [settingsSection, setSettingsSection] = useState<'appearance' | 'ai' | 'about'>('appearance');
     const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
-    const [newProvider, setNewProvider] = useState({ name: '', type: 'openai' as AIProvider['type'], baseUrl: '', apiKey: '', model: '' });
+    const [newProvider, setNewProvider] = useState({ name: '', type: 'openai' as AIProvider['type'], baseUrl: '', apiKey: '', model: '', models: [] as string[] });
     const [showAddProvider, setShowAddProvider] = useState(false);
 
     const toggleKey = (id: string) => setShowKeys((p) => ({ ...p, [id]: !p[id] }));
@@ -65,8 +65,16 @@ function Layout() {
 
     const handleAddProvider = () => {
         if (!newProvider.name || !newProvider.baseUrl) return;
-        addAIProvider({ name: newProvider.name, type: newProvider.type, baseUrl: newProvider.baseUrl, apiKey: newProvider.apiKey || undefined, models: [], enabled: !!newProvider.apiKey, defaultModel: newProvider.model || undefined });
-        setNewProvider({ name: '', type: 'openai', baseUrl: '', apiKey: '', model: '' });
+        addAIProvider({
+            name: newProvider.name,
+            type: newProvider.type,
+            baseUrl: newProvider.baseUrl,
+            apiKey: newProvider.apiKey || undefined,
+            models: newProvider.models,
+            enabled: !!newProvider.apiKey,
+            defaultModel: newProvider.model || newProvider.models[0] || undefined,
+        });
+        setNewProvider({ name: '', type: 'openai', baseUrl: '', apiKey: '', model: '', models: [] });
         setShowAddProvider(false);
     };
 
@@ -78,24 +86,78 @@ function Layout() {
     ];
 
     const PRESETS = [
-        { label: '通义千问 (DashScope)', name: '通义千问', type: 'openai' as AIProvider['type'], baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-        { label: '百炼 CodingPlan', name: 'CodingPlan', type: 'openai' as AIProvider['type'], baseUrl: 'https://coding.dashscope.aliyuncs.com/v1', model: 'qwen3-coder-plus' },
-        { label: 'OpenAI', name: 'OpenAI', type: 'openai' as AIProvider['type'], baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
-        { label: 'Anthropic', name: 'Anthropic', type: 'anthropic' as AIProvider['type'], baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514' },
-        { label: 'Ollama (本地)', name: 'Ollama', type: 'ollama' as AIProvider['type'], baseUrl: 'http://localhost:11434', model: 'qwen2' },
-        { label: '火山引擎 (Ark)', name: '火山引擎', type: 'openai' as AIProvider['type'], baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'ark-code-latest' },
-        { label: '自定义', name: '自定义提供商', type: 'custom' as AIProvider['type'], baseUrl: '', model: '' },
+        {
+            label: '通义千问 (DashScope)', name: '通义千问', type: 'openai' as AIProvider['type'],
+            baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus',
+            models: [
+                // Qwen3 系列
+                'qwen3-max', 'qwen3-max-2025-09-23', 'qwen3-max-2026-01-23',
+                'qwen3-plus', 'qwen3-plus-2025-09-19',
+                'qwen3-turbo', 'qwen3-turbo-2025-04-28',
+                'qwen3-coder-plus',
+                // Qwen-Max/Plus/Flash/Turbo
+                'qwen-max', 'qwen-max-latest',
+                'qwen-plus', 'qwen-plus-latest',
+                'qwen-turbo', 'qwen-turbo-latest',
+                'qwen-long',
+                // Coding
+                'qwen-coder-plus', 'qwen-coder-turbo',
+                'qwen2.5-coder-32b-instruct', 'qwen2.5-coder-7b-instruct',
+                // QwQ reasoning
+                'qwq-32b', 'qwq-plus',
+                // Qwen2.5
+                'qwen2.5-72b-instruct', 'qwen2.5-32b-instruct', 'qwen2.5-14b-instruct',
+                'qwen2.5-7b-instruct',
+                // DeepSeek via DashScope
+                'deepseek-v3', 'deepseek-r1',
+            ],
+        },
+        {
+            label: '百炼 CodingPlan', name: 'CodingPlan', type: 'openai' as AIProvider['type'],
+            baseUrl: 'https://coding.dashscope.aliyuncs.com/v1', model: 'qwen3-coder-plus',
+            models: ['qwen3-coder-plus', 'qwen-coder-plus', 'qwen-coder-turbo'],
+        },
+        {
+            label: 'OpenAI', name: 'OpenAI', type: 'openai' as AIProvider['type'],
+            baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o',
+            models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o3', 'o3-mini', 'o4-mini'],
+        },
+        {
+            label: 'Anthropic', name: 'Anthropic', type: 'anthropic' as AIProvider['type'],
+            baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514',
+            models: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-sonnet-4-20250514', 'claude-haiku-4-5', 'claude-3-7-sonnet-latest'],
+        },
+        {
+            label: 'Ollama (本地)', name: 'Ollama', type: 'ollama' as AIProvider['type'],
+            baseUrl: 'http://localhost:11434', model: 'qwen2',
+            models: [],  // fetched dynamically from local Ollama
+        },
+        {
+            label: '火山引擎 (Ark)', name: '火山引擎', type: 'openai' as AIProvider['type'],
+            baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'ark-code-latest',
+            models: ['ark-code-latest', 'ark-code'],
+        },
+        { label: '自定义', name: '自定义提供商', type: 'custom' as AIProvider['type'], baseUrl: '', model: '', models: [] },
     ];
+
 
     return (
         <div className="h-screen flex bg-[#FAFBFC] dark:bg-base-300">
             <ToastContainer />
 
-            {/* Icon Sidebar */}
-            <div className="w-16 shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center pb-4 gap-1 border-r border-black/5 dark:border-white/5">
-                {/* Draggable top area for macOS traffic lights */}
-                <div className="w-full h-12 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} data-tauri-drag-region />
-                <div className="w-9 h-9 rounded-lg bg-white dark:bg-[#404040] flex items-center justify-center mb-4 cursor-pointer shadow-sm">
+            {/* Icon Sidebar — entire sidebar is the drag region so users can drag from any empty space */}
+            <div
+                className="w-16 shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center pb-4 gap-1 border-r border-black/5 dark:border-white/5"
+                style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+                data-tauri-drag-region
+            >
+                {/* macOS traffic lights live at top-left — reserve 52px of space */}
+                <div className="w-full h-[52px] shrink-0" />
+
+                <div
+                    className="w-9 h-9 rounded-lg bg-white dark:bg-[#404040] flex items-center justify-center mb-4 cursor-pointer shadow-sm"
+                    style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                >
                     <Sparkles size={16} className="text-[#07c160]" />
                 </div>
 
@@ -106,23 +168,26 @@ function Layout() {
                             key={item.path}
                             onClick={() => navigate(item.path)}
                             className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${item.active
-                                ? 'text-[#07c160] bg-black/5 dark:bg-white/10'
-                                : 'text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10'
+                                ? 'text-[#07c160]'
+                                : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5'
                                 }`}
                             title={item.label}
+                            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                         >
                             <Icon size={20} />
                         </button>
                     );
                 })}
 
+                {/* Spacer — also draggable since it inherits from parent */}
                 <div className="flex-1" />
 
                 {/* Theme toggle */}
                 <button
-                    className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                     onClick={toggleTheme}
                     title={isDark ? 'Light' : 'Dark'}
+                    style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                 >
                     {isDark ? <Sun size={18} /> : <Moon size={18} />}
                 </button>
@@ -131,17 +196,21 @@ function Layout() {
                 <div className="relative" ref={moreMenuRef}>
                     <button
                         className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${showMoreMenu
-                            ? 'text-[#07c160] bg-black/5 dark:bg-white/10'
-                            : 'text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10'
+                            ? 'text-[#07c160]'
+                            : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5'
                             }`}
                         onClick={() => setShowMoreMenu(!showMoreMenu)}
+                        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                     >
                         <Menu size={18} />
                     </button>
 
                     {/* Popup menu */}
                     {showMoreMenu && (
-                        <div className="absolute bottom-0 left-16 w-[180px] bg-white dark:bg-[#353535] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
+                        <div
+                            className="absolute bottom-0 left-16 w-[180px] bg-white dark:bg-[#353535] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50"
+                            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                        >
                             <button
                                 onClick={() => { setShowSettings(true); setShowMoreMenu(false); }}
                                 className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-[#f5f5f5] dark:hover:bg-[#404040] flex items-center gap-3"
@@ -149,13 +218,7 @@ function Layout() {
                                 <SettingsIcon size={16} className="text-gray-400" />设置
                             </button>
                             <button
-                                onClick={() => { navigate('/logs'); setShowMoreMenu(false); }}
-                                className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-[#f5f5f5] dark:hover:bg-[#404040] flex items-center gap-3"
-                            >
-                                <Activity size={16} className="text-gray-400" />日志
-                            </button>
-                            <div className="border-t border-black/5 dark:border-white/5 my-1" />
-                            <button
+                                onClick={() => { setShowSettings(true); setSettingsSection('about'); setShowMoreMenu(false); }}
                                 className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-[#f5f5f5] dark:hover:bg-[#404040] flex items-center gap-3"
                             >
                                 <Info size={16} className="text-gray-400" />关于 Helix
@@ -169,6 +232,7 @@ function Layout() {
             <main className="flex-1 overflow-hidden flex">
                 <Outlet />
             </main>
+
 
             {/* Settings Modal Overlay */}
             {showSettings && (
@@ -246,7 +310,7 @@ function Layout() {
                                         <div className="p-4 bg-white dark:bg-[#2e2e2e] rounded-xl space-y-2">
                                             <select className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200" value="" onChange={(e) => {
                                                 const preset = PRESETS[Number(e.target.value)];
-                                                if (preset) setNewProvider({ name: preset.name, type: preset.type, baseUrl: preset.baseUrl, apiKey: '', model: preset.model });
+                                                if (preset) setNewProvider({ name: preset.name, type: preset.type, baseUrl: preset.baseUrl, apiKey: '', model: preset.model, models: preset.models || [] });
                                             }}>
                                                 <option value="" disabled>选择 AI 提供商...</option>
                                                 {PRESETS.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
@@ -304,10 +368,20 @@ function Layout() {
                             {settingsSection === 'about' && (
                                 <div className="space-y-4">
                                     <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-4">关于</h3>
-                                    <div className="p-5 rounded-xl bg-white dark:bg-[#2e2e2e] space-y-2 text-sm text-gray-600 dark:text-gray-300">
-                                        <p><strong className="text-gray-800 dark:text-white">Helix</strong> — AI 驱动的智能体平台</p>
-                                        <p>版本: 1.0.0</p>
-                                        <p>基于 Tauri + React 构建</p>
+                                    <div className="p-5 rounded-xl bg-white dark:bg-[#2e2e2e] space-y-3 text-sm text-gray-600 dark:text-gray-300">
+                                        <div className="flex items-center gap-3 mb-2">
+                                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center">
+                                                <Sparkles size={20} className="text-white" />
+                                            </div>
+                                            <div>
+                                                <p className="font-semibold text-gray-800 dark:text-white">Helix</p>
+                                                <p className="text-xs text-gray-400">AI 驱动的智能体平台</p>
+                                            </div>
+                                        </div>
+                                        <div className="border-t border-black/5 dark:border-white/5 pt-3 space-y-1.5 text-xs">
+                                            <div className="flex justify-between"><span className="text-gray-400">版本</span><span>0.3.0</span></div>
+                                            <div className="flex justify-between"><span className="text-gray-400">技术栈</span><span>Tauri + React + Rust</span></div>
+                                        </div>
                                     </div>
                                 </div>
                             )}

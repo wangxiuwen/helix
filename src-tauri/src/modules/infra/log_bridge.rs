@@ -80,6 +80,13 @@ pub fn get_buffered_logs() -> Vec<LogEntry> {
     get_log_buffer().read().iter().cloned().collect()
 }
 
+/// Emit a custom event to the frontend via the global app handle
+pub fn emit_custom_event(event_name: &str, payload: impl Serialize + Clone) {
+    if let Some(handle) = APP_HANDLE.get() {
+        let _ = handle.emit(event_name, payload);
+    }
+}
+
 /// Clear log buffer
 pub fn clear_log_buffer() {
     get_log_buffer().write().clear();

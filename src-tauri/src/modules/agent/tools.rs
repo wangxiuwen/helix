@@ -10,6 +10,64 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Stdio;
 
+/// Sandbox directory for agent file writes — all file_write/file_edit operations
+/// are restricted to this directory to prevent the agent from writing files everywhere.
+const SANDBOX_DIR: &str = "helix_workspace";
+
+/// Get the full sandbox directory path
+fn get_sandbox_path() -> String {
+    if let Some(home) = dirs::home_dir() {
+        format!("{}/{}", home.display(), SANDBOX_DIR)
+    } else {
+        format!("./{}", SANDBOX_DIR)
+    }
+}
+
+/// Validate that a path is within the sandbox directory.
+/// Returns the canonicalized path if valid, or an error message.
+fn validate_sandbox_path(path: &str) -> Result<String, String> {
+    let sandbox = get_sandbox_path();
+    // Auto-create sandbox dir
+    let _ = std::fs::create_dir_all(&sandbox);
+    
+    let expanded = expand_path(path);
+    let abs_path = if std::path::Path::new(&expanded).is_absolute() {
+        expanded
+    } else {
+        format!("{}/{}", sandbox, expanded)
+    };
+    
+    // Normalize path (resolve .., etc)
+    let canonical_sandbox = std::fs::canonicalize(&sandbox)
+        .unwrap_or_else(|_| std::path::PathBuf::from(&sandbox));
+    
+    // For new files, check the parent exists within sandbox
+    let path_buf = std::path::PathBuf::from(&abs_path);
+    let check_path = if path_buf.exists() {
+        std::fs::canonicalize(&abs_path)
+            .unwrap_or_else(|_| path_buf.clone())
+    } else {
+        // For new files, resolve the parent
+        if let Some(parent) = path_buf.parent() {
+            let _ = std::fs::create_dir_all(parent);
+            let resolved_parent = std::fs::canonicalize(parent)
+                .unwrap_or_else(|_| parent.to_path_buf());
+            resolved_parent.join(path_buf.file_name().unwrap_or_default())
+        } else {
+            path_buf
+        }
+    };
+    
+    if check_path.starts_with(&canonical_sandbox) {
+        Ok(abs_path)
+    } else {
+        Err(format!(
+            "❌ 安全限制: 只能在 ~/{} 目录下写入文件。请使用该目录下的路径。\n当前路径: {}",
+            SANDBOX_DIR, abs_path
+        ))
+    }
+}
+
 
 
 // ============================================================================
@@ -61,11 +119,11 @@ pub async fn get_tool_definitions() -> Vec<ChatCompletionTool> {
             json!({"type":"object","properties":{"path":{"type":"string"},"max_lines":{"type":"integer"}},"required":["path"]}),
         ),
         tool("file_write",
-            "Write content to a file. Creates if new, overwrites if exists.",
-            json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"append":{"type":"boolean"}},"required":["path","content"]}),
+            &format!("Write content to a file. Creates if new, overwrites if exists. RESTRICTED: files can only be written inside ~/{}/", SANDBOX_DIR),
+            json!({"type":"object","properties":{"path":{"type":"string","description":format!("File path (relative paths are resolved inside ~/{}/)", SANDBOX_DIR)},"content":{"type":"string"},"append":{"type":"boolean"}},"required":["path","content"]}),
         ),
         tool("file_edit",
-            "Edit a file by replacing specific text.",
+            &format!("Edit a file by replacing specific text. RESTRICTED: only files inside ~/{}/", SANDBOX_DIR),
             json!({"type":"object","properties":{"path":{"type":"string"},"search":{"type":"string"},"replace":{"type":"string"},"all":{"type":"boolean"}},"required":["path","search","replace"]}),
         ),
         tool("web_fetch",
@@ -272,7 +330,8 @@ async fn tool_file_read(args: &Value) -> Result<String, String> {
 
 // ---- File Write ----
 async fn tool_file_write(args: &Value) -> Result<String, String> {
-    let path = expand_path(args["path"].as_str().ok_or("Missing 'path'")?);
+    let raw_path = args["path"].as_str().ok_or("Missing 'path'")?;
+    let path = validate_sandbox_path(raw_path)?;
     let content = args["content"].as_str().ok_or("Missing 'content'")?;
     let append = args["append"].as_bool().unwrap_or(false);
 
@@ -305,7 +364,8 @@ async fn tool_file_write(args: &Value) -> Result<String, String> {
 
 // ---- File Edit ----
 async fn tool_file_edit(args: &Value) -> Result<String, String> {
-    let path = expand_path(args["path"].as_str().ok_or("Missing 'path'")?);
+    let raw_path = args["path"].as_str().ok_or("Missing 'path'")?;
+    let path = validate_sandbox_path(raw_path)?;
     let search = args["search"].as_str().ok_or("Missing 'search'")?;
     let replace = args["replace"].as_str().ok_or("Missing 'replace'")?;
     let all = args["all"].as_bool().unwrap_or(false);

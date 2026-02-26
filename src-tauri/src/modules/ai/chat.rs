@@ -274,3 +274,117 @@ pub async fn ai_test_connection() -> Result<Value, String> {
         "usage": resp.usage,
     }))
 }
+
+/// List available models from an OpenAI-compatible provider
+#[tauri::command]
+pub async fn ai_list_models(base_url: String, api_key: String) -> Result<Value, String> {
+    let effective_url = if base_url.contains("coding.dashscope.aliyuncs.com") {
+        "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()
+    } else {
+        base_url.clone()
+    };
+
+    let url = format!("{}/models", effective_url.trim_end_matches('/'));
+    info!("Fetching models from: {}", url);
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    if !api_key.is_empty() {
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", api_key))
+                .map_err(|e| format!("Invalid API key: {}", e))?,
+        );
+    }
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let mut models: Vec<String> = Vec::new();
+
+    // Try OpenAI-compatible /models endpoint
+    if let Ok(resp) = client.get(&url).headers(headers).send().await {
+        if resp.status().is_success() {
+            if let Ok(data) = resp.json::<Value>().await {
+                if let Some(arr) = data.get("data").and_then(|d| d.as_array()) {
+                    for item in arr {
+                        if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                            models.push(id.to_string());
+                        }
+                    }
+                }
+                if models.is_empty() {
+                    if let Some(arr) = data.get("models").and_then(|d| d.as_array()) {
+                        for item in arr {
+                            if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                                models.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: Ollama /api/tags
+    if models.is_empty() && (base_url.contains("localhost") || base_url.contains("127.0.0.1")) {
+        let ollama_url = format!("{}/api/tags", base_url.trim_end_matches('/').trim_end_matches("/v1"));
+        if let Ok(resp) = client.get(&ollama_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(data) = resp.json::<Value>().await {
+                    if let Some(arr) = data.get("models").and_then(|d| d.as_array()) {
+                        for item in arr {
+                            if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                                models.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: built-in model lists for known providers
+    if models.is_empty() {
+        models = get_builtin_models(&base_url);
+    }
+
+    models.sort();
+    info!("Listed {} models from {}", models.len(), base_url);
+
+    Ok(json!({ "models": models }))
+}
+
+/// Built-in model lists for providers that don't support /models endpoint
+fn get_builtin_models(base_url: &str) -> Vec<String> {
+    if base_url.contains("coding.dashscope") {
+        vec![
+            "qwen3.5-plus", "qwen3-coder-next", "qwen3-coder-plus",
+            "qwen3-max-2026-01-23", "MiniMax-M2.5",
+            "glm-5", "glm-4.7", "kimi-k2.5",
+        ]
+    } else if base_url.contains("dashscope") {
+        vec![
+            "qwen3-max", "qwen3-plus", "qwen3-turbo", "qwen3-coder-plus",
+            "qwen-max", "qwen-max-latest", "qwen-plus", "qwen-plus-latest",
+            "qwen-turbo", "qwen-turbo-latest", "qwen-long",
+            "qwen-coder-plus", "qwen-coder-turbo",
+            "qwq-32b", "qwq-plus", "deepseek-v3", "deepseek-r1",
+        ]
+    } else if base_url.contains("openai.com") {
+        vec!["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3", "o3-mini", "o4-mini"]
+    } else if base_url.contains("anthropic.com") {
+        vec![
+            "claude-opus-4-5", "claude-sonnet-4-5",
+            "claude-sonnet-4-20250514", "claude-haiku-4-5",
+        ]
+    } else {
+        return vec![];
+    }
+    .into_iter()
+    .map(|s| s.to_string())
+    .collect()
+}

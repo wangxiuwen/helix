@@ -124,7 +124,16 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::VISIBLE
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             let _ = app.get_webview_window("main")
                 .map(|window| {
@@ -280,6 +289,7 @@ pub fn run() {
             modules::ai_chat::ai_get_config,
             modules::ai_chat::ai_set_config,
             modules::ai_chat::ai_test_connection,
+            modules::ai_chat::ai_list_models,
             // Database commands
             modules::database::db_list_accounts,
             modules::database::db_get_messages,
