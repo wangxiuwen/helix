@@ -182,10 +182,7 @@ pub async fn get_tool_definitions() -> Vec<ChatCompletionTool> {
             "Fill text into an input element using its ref_id.",
             json!({"type":"object","properties":{"ref_id":{"type":"string"},"text":{"type":"string"}},"required":["ref_id","text"]}),
         ),
-        tool("wechat_send_file",
-            "Send a file to the user through WeChat File Transfer Assistant.",
-            json!({"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"}},"required":["file_path"]}),
-        ),
+
     ];
 
     // Merge with plugin tools

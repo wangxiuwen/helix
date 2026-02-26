@@ -19,9 +19,21 @@ use async_openai::{
 use serde_json::{json, Value};
 use tracing::info;
 use tauri::Emitter;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::modules::config::load_app_config;
 use crate::modules::database;
+
+/// Global cancellation flag — set to true to stop the running agent loop
+static AGENT_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Cancel the currently running agent
+#[tauri::command]
+pub fn agent_cancel() {
+    AGENT_CANCELLED.store(true, Ordering::SeqCst);
+    emit_agent_progress("cancelled", json!({}));
+    info!("[agent] Cancellation requested");
+}
 
 /// Emit agent progress event to frontend for real-time display
 fn emit_agent_progress(event_type: &str, data: Value) {
@@ -248,9 +260,14 @@ pub async fn agent_process_message(
     // 5. Build tool definitions
     let tool_defs = get_tool_definitions().await;
 
-    // 6. Agent loop
+    // 6. Agent loop — reset cancellation flag first
+    AGENT_CANCELLED.store(false, Ordering::SeqCst);
     let max_iterations = 10;
     for iteration in 0..max_iterations {
+        // Check cancellation before each AI call
+        if AGENT_CANCELLED.load(Ordering::SeqCst) {
+            return Err("⏹ 已停止".to_string());
+        }
         info!("[agent] Iteration {}, msgs={}", iteration, messages.len());
         emit_agent_progress("thinking", json!({ "iteration": iteration, "model": &ai.model }));
 

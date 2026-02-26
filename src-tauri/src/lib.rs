@@ -297,6 +297,7 @@ pub fn run() {
             modules::database::db_set_auto_reply,
             // Agent commands
             modules::agent::agent_chat,
+            modules::agent::agent_cancel,
             modules::agent::agent_get_history,
             modules::agent::agent_clear_history,
             // Cron commands

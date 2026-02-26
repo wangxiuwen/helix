@@ -16,6 +16,7 @@ import {
     Smile,
     Sparkles,
     Trash2,
+    Square,
     User,
     Wrench,
     X,
@@ -94,23 +95,35 @@ function AIChat() {
     }, [activeSession?.messages, agentStatus]);
 
     // Listen for agent-progress events from Rust backend
+    // Use a ref to track listener registration and prevent duplicates from React StrictMode
+    const listenerRegistered = useRef(false);
     useEffect(() => {
+        if (listenerRegistered.current) return;
+        listenerRegistered.current = true;
         let unlisten: (() => void) | null = null;
+        const seenIds = new Set<number>();
         import('@tauri-apps/api/event').then(({ listen }) => {
             listen<{ type: string; data: any }>('agent-progress', (event) => {
+                // Deduplicate events by event ID
+                if (seenIds.has(event.id)) return;
+                seenIds.add(event.id);
                 const { type, data } = event.payload;
                 if (type === 'thinking') {
-                    setAgentStatus(prev => [...prev, `🤔 思考中... (模型: ${data.model})`]);
+                    setAgentStatus(prev => {
+                        const last = prev[prev.length - 1];
+                        const msg = `🤔 思考中... (模型: ${data.model})`;
+                        return last === msg ? prev : [...prev, msg];
+                    });
                 } else if (type === 'tool_call') {
                     setAgentStatus(prev => [...prev, `🔧 调用工具: ${data.name}`]);
                 } else if (type === 'tool_result') {
                     setAgentStatus(prev => [...prev, `✅ ${data.name} 完成 (${data.chars} 字符)`]);
-                } else if (type === 'done') {
+                } else if (type === 'done' || type === 'cancelled') {
                     setAgentStatus([]);
                 }
             }).then(fn => { unlisten = fn; });
         });
-        return () => { unlisten?.(); };
+        return () => { unlisten?.(); listenerRegistered.current = false; };
     }, []);
 
     // Auto-fetch models from API when provider changes
@@ -537,14 +550,24 @@ function AIChat() {
 
                                 <div className="flex-1" />
 
-                                {/* Send */}
-                                <button
-                                    className="px-4 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] disabled:opacity-40 text-white rounded-full transition-colors"
-                                    onClick={handleSend}
-                                    disabled={!input.trim() || loading.chat}
-                                >
-                                    {t('chat.send', '发送')}
-                                </button>
+                                {/* Send / Stop */}
+                                {loading.chat ? (
+                                    <button
+                                        className="px-4 py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors flex items-center gap-1.5"
+                                        onClick={() => invoke('agent_cancel')}
+                                    >
+                                        <Square size={11} fill="white" />
+                                        {t('chat.stop', '停止')}
+                                    </button>
+                                ) : (
+                                    <button
+                                        className="px-4 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] disabled:opacity-40 text-white rounded-full transition-colors"
+                                        onClick={handleSend}
+                                        disabled={!input.trim() && pendingImages.length === 0}
+                                    >
+                                        {t('chat.send', '发送')}
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </>
