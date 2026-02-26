@@ -265,8 +265,9 @@ pub async fn agent_process_message(
     // 5. Build tool definitions
     let tool_defs = get_tool_definitions().await;
 
-    // 6. Agent loop — reset cancellation flag first
+    // 6. Agent loop — reset state for new call
     AGENT_CANCELLED.store(false, Ordering::SeqCst);
+    super::tools::clear_sent_files();
     let max_iterations = 10;
     for iteration in 0..max_iterations {
         // Check cancellation before each AI call

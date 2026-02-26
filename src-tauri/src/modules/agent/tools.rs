@@ -9,6 +9,19 @@ use async_openai::types::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Stdio;
+use std::sync::Mutex;
+use std::collections::HashSet;
+
+/// Tracks files already sent in the current agent session to prevent duplicates.
+static SENT_FILES: std::sync::LazyLock<Mutex<HashSet<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Call at the start of each agent call to reset sent-file tracking.
+pub fn clear_sent_files() {
+    if let Ok(mut set) = SENT_FILES.lock() {
+        set.clear();
+    }
+}
 
 /// Sandbox directory for agent file writes — all file_write/file_edit operations
 /// are restricted to this directory to prevent the agent from writing files everywhere.
@@ -380,6 +393,14 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         "xlsx"       => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         _            => "application/octet-stream",
     };
+
+    // Deduplicate: if this exact path was already sent in this agent session, skip
+    if let Ok(mut set) = SENT_FILES.lock() {
+        if set.contains(&path) {
+            return Ok(format!("文件「{}」已经发送过了，无需重复发送。", display_name));
+        }
+        set.insert(path.clone());
+    }
 
     // Emit only path + metadata to frontend — NO file data travels through IPC.
     // Frontend opens native OS save dialog and copies directly from disk.
