@@ -129,14 +129,24 @@ function AIChat() {
     }, []);
 
     // Listen for file-attachment events from agent
+    const fileListenerRegistered = useRef(false);
     useEffect(() => {
+        if (fileListenerRegistered.current) return;
+        fileListenerRegistered.current = true;
         let unlisten: (() => void) | null = null;
+        const recentPaths = new Map<string, number>(); // path -> timestamp
         import('@tauri-apps/api/event').then(({ listen }) => {
             listen<{ name: string; mime: string; size: string; path: string }>('file-attachment', (event) => {
-                setFileAttachments(prev => [...prev, { id: Date.now(), ...event.payload }]);
+                const { path } = event.payload;
+                const now = Date.now();
+                // Deduplicate: same path within 5 seconds = ignore
+                const last = recentPaths.get(path);
+                if (last && now - last < 5000) return;
+                recentPaths.set(path, now);
+                setFileAttachments(prev => [...prev, { id: now, ...event.payload }]);
             }).then(fn => { unlisten = fn; });
         });
-        return () => { unlisten?.(); };
+        return () => { unlisten?.(); fileListenerRegistered.current = false; };
     }, []);
 
     // Auto-fetch models from API when provider changes
