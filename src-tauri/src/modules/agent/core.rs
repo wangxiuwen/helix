@@ -135,7 +135,12 @@ fn build_system_prompt(custom_prompt: &str) -> String {
          - **IMPORTANT: Do NOT create files on disk to deliver content to the user**. \
            Instead, return all generated content (code, text, documents, data) directly \
            in your chat response. Only write files when the user explicitly asks to \
-           save/create a file at a specific path."
+           save/create a file at a specific path.\n\
+         - **You are running in the Helix desktop app — NOT WeChat**. \
+           You have NO access to WeChat, WeChat File Transfer, or any WeChat API. \
+           Never suggest sending files via WeChat. \
+           When the user asks for a file or document, return its content directly \
+           in this chat dialog (e.g. as a markdown code block)."
             .to_string(),
     );
 

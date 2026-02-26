@@ -182,6 +182,10 @@ pub async fn get_tool_definitions() -> Vec<ChatCompletionTool> {
             "Fill text into an input element using its ref_id.",
             json!({"type":"object","properties":{"ref_id":{"type":"string"},"text":{"type":"string"}},"required":["ref_id","text"]}),
         ),
+        tool("chat_send_file",
+            "Send a file directly to the user in this chat dialog so they can download it. Use this whenever the user asks you to 'give them', 'send them', or 'share' a file.",
+            json!({"type":"object","properties":{"path":{"type":"string","description":"Absolute path to the file to send"},"display_name":{"type":"string","description":"Optional display name for the file"}},"required":["path"]}),
+        ),
 
     ];
 
@@ -198,6 +202,7 @@ pub async fn execute_tool(name: &str, args: &Value, ctx: Option<&str>) -> Result
     match name {
         "shell_exec" => tool_shell_exec(args).await,
         "file_read" => tool_file_read(args).await,
+        "chat_send_file" => tool_chat_send_file(args).await,
         "file_write" => tool_file_write(args).await,
         "file_edit" => tool_file_edit(args).await,
         "web_fetch" => tool_web_fetch(args).await,
@@ -323,6 +328,85 @@ async fn tool_file_read(args: &Value) -> Result<String, String> {
     } else {
         Ok(content)
     }
+}
+
+// ---- Chat Send File (delivers a file as a downloadable attachment in the chat) ----
+async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
+    let path = expand_path(args["path"].as_str().ok_or("Missing 'path'")?);
+    let display_name = args["display_name"]
+        .as_str()
+        .unwrap_or_else(|| {
+            std::path::Path::new(&path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+        })
+        .to_string();
+
+    // Verify file exists
+    let meta = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("Cannot access '{}': {}", path, e))?;
+
+    let size_bytes = meta.len();
+    let size_str = if size_bytes > 1024 * 1024 {
+        format!("{:.1} MB", size_bytes as f64 / 1024.0 / 1024.0)
+    } else if size_bytes > 1024 {
+        format!("{:.1} KB", size_bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", size_bytes)
+    };
+
+    // Detect mime type from extension
+    let ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "pdf"        => "application/pdf",
+        "png"        => "image/png",
+        "jpg"|"jpeg" => "image/jpeg",
+        "gif"        => "image/gif",
+        "webp"       => "image/webp",
+        "zip"        => "application/zip",
+        "tar"|"gz"   => "application/gzip",
+        "txt"|"md"   => "text/plain",
+        "json"       => "application/json",
+        "csv"        => "text/csv",
+        "mp3"        => "audio/mpeg",
+        "mp4"        => "video/mp4",
+        "docx"       => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx"       => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _            => "application/octet-stream",
+    };
+
+    // Emit only path + metadata to frontend — NO file data travels through IPC.
+    // Frontend opens native OS save dialog and copies directly from disk.
+    crate::modules::infra::log_bridge::emit_custom_event("file-attachment", serde_json::json!({
+        "name": display_name,
+        "path": path,
+        "mime": mime,
+        "size": size_str,
+    }));
+
+    Ok(format!("✅ 文件「{}」({})已发送到对话框，用户可以点击「另存为」下载。", display_name, size_str))
+}
+
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        result.push(CHARS[(b0 >> 2)] as char);
+        result.push(CHARS[((b0 & 3) << 4) | (b1 >> 4)] as char);
+        result.push(if chunk.len() > 1 { CHARS[((b1 & 15) << 2) | (b2 >> 6)] as char } else { '=' });
+        result.push(if chunk.len() > 2 { CHARS[b2 & 63] as char } else { '=' });
+    }
+    result
 }
 
 // ---- File Write ----

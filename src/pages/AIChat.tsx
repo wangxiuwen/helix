@@ -89,10 +89,12 @@ function AIChat() {
 
     // Agent progress tracking
     const [agentStatus, setAgentStatus] = useState<string[]>([]);
+    // File attachments received from agent via Tauri events
+    const [fileAttachments, setFileAttachments] = useState<Array<{ id: number; name: string; mime: string; size: string; path: string }>>([]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [activeSession?.messages, agentStatus]);
+    }, [activeSession?.messages, agentStatus, fileAttachments]);
 
     // Listen for agent-progress events from Rust backend
     // Use a ref to track listener registration and prevent duplicates from React StrictMode
@@ -124,6 +126,17 @@ function AIChat() {
             }).then(fn => { unlisten = fn; });
         });
         return () => { unlisten?.(); listenerRegistered.current = false; };
+    }, []);
+
+    // Listen for file-attachment events from agent
+    useEffect(() => {
+        let unlisten: (() => void) | null = null;
+        import('@tauri-apps/api/event').then(({ listen }) => {
+            listen<{ name: string; mime: string; size: string; path: string }>('file-attachment', (event) => {
+                setFileAttachments(prev => [...prev, { id: Date.now(), ...event.payload }]);
+            }).then(fn => { unlisten = fn; });
+        });
+        return () => { unlisten?.(); };
     }, []);
 
     // Auto-fetch models from API when provider changes
@@ -366,7 +379,41 @@ function AIChat() {
                                                         ))}
                                                     </div>
                                                 )}
-                                                {msg.content !== '(图片)' && <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{msg.content}</ReactMarkdown>}
+                                                {msg.content !== '(图片)' && (() => {
+                                                    // Parse __FILE_ATTACHMENT__ markers out of message content
+                                                    const parts = msg.content.split(/(__FILE_ATTACHMENT__\{.*?\}(?=__|$))/s);
+                                                    return parts.map((part, i) => {
+                                                        if (part.startsWith('__FILE_ATTACHMENT__')) {
+                                                            try {
+                                                                const jsonStr = part.slice('__FILE_ATTACHMENT__'.length);
+                                                                const att = JSON.parse(jsonStr);
+                                                                return (
+                                                                    <div key={i} className="not-prose my-2 flex items-center gap-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                                                                        <div className="text-2xl shrink-0">
+                                                                            {att.mime?.startsWith('image/') ? '🖼️' : att.mime === 'application/pdf' ? '📄' : att.mime?.includes('zip') ? '📦' : '📁'}
+                                                                        </div>
+                                                                        <div className="flex-1 min-w-0">
+                                                                            <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{att.name}</div>
+                                                                            <div className="text-xs text-gray-500">{att.size}</div>
+                                                                        </div>
+                                                                        <button
+                                                                            className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium"
+                                                                            onClick={() => {
+                                                                                const a = document.createElement('a');
+                                                                                a.href = `data:${att.mime};base64,${att.data}`;
+                                                                                a.download = att.name;
+                                                                                a.click();
+                                                                            }}
+                                                                        >
+                                                                            ⬇ 下载
+                                                                        </button>
+                                                                    </div>
+                                                                );
+                                                            } catch { return null; }
+                                                        }
+                                                        return part.trim() ? <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{part}</ReactMarkdown> : null;
+                                                    });
+                                                })()}
                                             </div>
                                             {msg.toolCalls && msg.toolCalls.length > 0 && (
                                                 <div className="mt-2 space-y-1">
@@ -418,6 +465,40 @@ function AIChat() {
                                     </div>
                                 </div>
                             )}
+                            {/* File attachment cards from agent */}
+                            {fileAttachments.map((att) => (
+                                <div key={att.id} className="flex gap-2.5">
+                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mt-0.5">
+                                        <Bot size={15} className="text-white" />
+                                    </div>
+                                    <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm shadow-sm max-w-[65%]">
+                                        <div className="flex items-center gap-3 px-4 py-3">
+                                            <div className="text-2xl shrink-0">
+                                                {att.mime?.startsWith('image/') ? '🖼️' : att.mime === 'application/pdf' ? '📄' : att.mime?.includes('zip') ? '📦' : '📁'}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{att.name}</div>
+                                                <div className="text-xs text-gray-500">{att.size}</div>
+                                            </div>
+                                            <button
+                                                className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium"
+                                                onClick={async () => {
+                                                    try {
+                                                        const { save } = await import('@tauri-apps/plugin-dialog');
+                                                        const { copyFile } = await import('@tauri-apps/plugin-fs');
+                                                        const dest = await save({ defaultPath: att.name });
+                                                        if (dest) await copyFile(att.path, dest);
+                                                    } catch (e) { console.error('Save failed:', e); }
+                                                }}
+                                            >⬇ 另存为</button>
+                                            <button
+                                                className="shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors ml-1"
+                                                onClick={() => setFileAttachments(prev => prev.filter(f => f.id !== att.id))}
+                                            ><X size={14} /></button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
                             <div ref={messagesEndRef} />
                         </div>
 
