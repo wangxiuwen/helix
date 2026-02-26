@@ -158,7 +158,13 @@ fn build_system_prompt(custom_prompt: &str) -> String {
            Do NOT paste the file contents as text. Do NOT just show the file path. \
            Always use `chat_send_file` for existing files.\n\
          - **If multiple files match the same name**, do NOT send any file automatically. \
-           Instead, list all matches with numbered paths and ask the user which one they want."
+           Instead, list all matches with numbered paths and ask the user which one they want.\n\
+         - **For weather, real-time data, or any online query**, use the `web_fetch` tool \
+           to call public APIs. Examples:\n\
+           - Weather: `web_fetch` with url `https://wttr.in/城市名?format=j1` (returns JSON)\n\
+           - Or `https://wttr.in/城市名?lang=zh` for readable weather in Chinese\n\
+           - Exchange rates, news, etc: use appropriate public APIs via `web_fetch`\n\
+           - You can make GET/POST requests with custom headers and body"
             .to_string(),
     );
 
