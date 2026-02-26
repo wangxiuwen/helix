@@ -101,17 +101,12 @@ function AIChat() {
     }, [activeSession?.messages, agentStatus, fileAttachments]);
 
     // Listen for agent-progress events from Rust backend
-    // Module-level flag survives React StrictMode unmount/remount
+    // One-shot registration: flag never resets, listener lives for app lifetime
     useEffect(() => {
         if (_agentListenerActive) return;
         _agentListenerActive = true;
-        let unlisten: (() => void) | null = null;
-        const seenIds = new Set<number>();
         import('@tauri-apps/api/event').then(({ listen }) => {
             listen<{ type: string; data: any }>('agent-progress', (event) => {
-                // Deduplicate events by event ID
-                if (seenIds.has(event.id)) return;
-                seenIds.add(event.id);
                 const { type, data } = event.payload;
                 if (type === 'thinking') {
                     setAgentStatus(prev => {
@@ -126,22 +121,19 @@ function AIChat() {
                 } else if (type === 'done' || type === 'cancelled') {
                     setAgentStatus([]);
                 }
-            }).then(fn => { unlisten = fn; });
+            });
         });
-        return () => { unlisten?.(); _agentListenerActive = false; };
     }, []);
 
     // Listen for file-attachment events from agent
     useEffect(() => {
         if (_fileListenerActive) return;
         _fileListenerActive = true;
-        let unlisten: (() => void) | null = null;
         import('@tauri-apps/api/event').then(({ listen }) => {
             listen<{ name: string; mime: string; size: string; path: string }>('file-attachment', (event) => {
                 setFileAttachments(prev => [...prev, { id: Date.now(), ...event.payload }]);
-            }).then(fn => { unlisten = fn; });
+            });
         });
-        return () => { unlisten?.(); _fileListenerActive = false; };
     }, []);
 
     // Auto-fetch models from API when provider changes
