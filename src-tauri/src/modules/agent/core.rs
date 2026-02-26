@@ -152,7 +152,10 @@ fn build_system_prompt(custom_prompt: &str) -> String {
            you MUST use the `chat_send_file` tool with the file's absolute path. \
            This will display a download card in the chat for the user to save it. \
            Do NOT paste the file contents as text. Do NOT just show the file path. \
-           Always use `chat_send_file` for existing files."
+           Always use `chat_send_file` for existing files.\n\
+         - **If multiple files match the same name**, only call `chat_send_file` ONCE \
+           for the most likely match (prefer ~/Downloads or ~/Desktop). \
+           Mention other matches in your text reply so the user can ask for a different one."
             .to_string(),
     );
 
@@ -277,106 +280,107 @@ pub async fn agent_process_message(
     // 5. Build tool definitions
     let tool_defs = get_tool_definitions().await;
 
-    // 6. Single-pass agent: one AI call → execute tools → one final AI call
+    // 6. Agent loop — controlled by finish_reason, max 3 iterations
+    //    Standard agent pattern: loop until model says "stop" or max reached
     AGENT_CANCELLED.store(false, Ordering::SeqCst);
     super::tools::clear_sent_files();
+    let max_iterations = 3;
 
-    // Check cancellation
-    if AGENT_CANCELLED.load(Ordering::SeqCst) {
-        return Err("⏹ 已停止".to_string());
-    }
-
-    // First AI call
-    emit_agent_progress("thinking", json!({ "iteration": 0, "model": &ai.model }));
-    let request = CreateChatCompletionRequestArgs::default()
-        .model(&ai.model)
-        .messages(messages.clone())
-        .tools(tool_defs.clone())
-        .build()
-        .map_err(|e| format!("Build request failed: {}", e))?;
-
-    let response = client
-        .chat()
-        .create(request)
-        .await
-        .map_err(|e| format!("AI call failed: {}", e))?;
-
-    let choice = response
-        .choices
-        .first()
-        .ok_or("No choices in AI response")?;
-
-    // If no tool calls, return text directly
-    let tool_calls = &choice.message.tool_calls;
-    let has_tools = tool_calls.as_ref().map_or(false, |tcs| !tcs.is_empty());
-
-    if !has_tools {
-        let content = choice.message.content.clone().unwrap_or_default();
-        let clean = clean_response(&content);
-        let _ = database::save_conversation_message(account_id, "assistant", &clean);
-        emit_agent_progress("done", json!({ "chars": clean.len() }));
-        return Ok(clean);
-    }
-
-    // Execute tool calls
-    let tcs = tool_calls.as_ref().unwrap();
-    let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
-        .tool_calls(tcs.clone())
-        .build()
-        .map_err(|e| e.to_string())?;
-    messages.push(assistant_msg.into());
-
-    for tc in tcs {
+    for iteration in 0..max_iterations {
         if AGENT_CANCELLED.load(Ordering::SeqCst) {
             return Err("⏹ 已停止".to_string());
         }
-        let tool_name = &tc.function.name;
-        info!("[agent] Tool call: {} (id={})", tool_name, tc.id);
-        emit_agent_progress("tool_call", json!({ "name": tool_name, "args": &tc.function.arguments }));
+        info!("[agent] Iteration {}, msgs={}", iteration, messages.len());
+        emit_agent_progress("thinking", json!({ "iteration": iteration, "model": &ai.model }));
 
-        let args: Value = serde_json::from_str(&tc.function.arguments)
-            .unwrap_or(json!({}));
+        let request = CreateChatCompletionRequestArgs::default()
+            .model(&ai.model)
+            .messages(messages.clone())
+            .tools(tool_defs.clone())
+            .build()
+            .map_err(|e| format!("Build request failed: {}", e))?;
 
-        let result = match execute_tool(tool_name, &args, Some(account_id)).await {
-            Ok(r) => r,
-            Err(e) => format!("Error: {}", e),
-        };
+        let response = client
+            .chat()
+            .create(request)
+            .await
+            .map_err(|e| format!("AI call failed: {}", e))?;
 
-        info!("[agent] Tool result: {} chars", result.len());
-        emit_agent_progress("tool_result", json!({ "name": tool_name, "chars": result.len(), "preview": &result[..result.len().min(200)] }));
+        let choice = response
+            .choices
+            .first()
+            .ok_or("No choices in AI response")?;
 
-        let tool_msg = ChatCompletionRequestToolMessageArgs::default()
-            .content(result)
-            .tool_call_id(tc.id.clone())
+        // Check finish_reason — the model tells us whether to continue or stop
+        let finish_reason = choice.finish_reason.as_ref()
+            .map(|r| format!("{:?}", r))
+            .unwrap_or_default()
+            .to_lowercase();
+
+        let has_tools = choice.message.tool_calls
+            .as_ref()
+            .map_or(false, |tcs| !tcs.is_empty());
+
+        // If finish_reason is "stop" or no tool calls → return final text
+        if finish_reason.contains("stop") || !has_tools {
+            let content = choice.message.content.clone().unwrap_or_default();
+            let clean = clean_response(&content);
+            let _ = database::save_conversation_message(account_id, "assistant", &clean);
+            emit_agent_progress("done", json!({ "chars": clean.len() }));
+            return Ok(clean);
+        }
+
+        // Model wants to call tools — execute them
+        let tcs = choice.message.tool_calls.as_ref().unwrap();
+        let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
+            .tool_calls(tcs.clone())
             .build()
             .map_err(|e| e.to_string())?;
-        messages.push(tool_msg.into());
+        messages.push(assistant_msg.into());
+
+        for tc in tcs {
+            if AGENT_CANCELLED.load(Ordering::SeqCst) {
+                return Err("⏹ 已停止".to_string());
+            }
+            let tool_name = &tc.function.name;
+            info!("[agent] Tool call: {} (id={})", tool_name, tc.id);
+            emit_agent_progress("tool_call", json!({ "name": tool_name, "args": &tc.function.arguments }));
+
+            let args: Value = serde_json::from_str(&tc.function.arguments)
+                .unwrap_or(json!({}));
+
+            let result = match execute_tool(tool_name, &args, Some(account_id)).await {
+                Ok(r) => r,
+                Err(e) => format!("Error: {}", e),
+            };
+
+            info!("[agent] Tool result: {} chars", result.len());
+            emit_agent_progress("tool_result", json!({ "name": tool_name, "chars": result.len(), "preview": &result[..result.len().min(200)] }));
+
+            let tool_msg = ChatCompletionRequestToolMessageArgs::default()
+                .content(result)
+                .tool_call_id(tc.id.clone())
+                .build()
+                .map_err(|e| e.to_string())?;
+            messages.push(tool_msg.into());
+        }
+        // Loop continues — next iteration will call AI again with tool results
     }
 
-    // Final AI call — get text response after tools
-    if AGENT_CANCELLED.load(Ordering::SeqCst) {
-        return Err("⏹ 已停止".to_string());
-    }
-    emit_agent_progress("thinking", json!({ "iteration": 1, "model": &ai.model }));
+    // Max iterations reached — do one final call without tools to force text response
+    info!("[agent] Max iterations reached, forcing final response");
     let final_request = CreateChatCompletionRequestArgs::default()
         .model(&ai.model)
         .messages(messages.clone())
-        .tools(tool_defs)
         .build()
         .map_err(|e| format!("Build request failed: {}", e))?;
 
-    let final_response = client
-        .chat()
-        .create(final_request)
-        .await
+    let final_response = client.chat().create(final_request).await
         .map_err(|e| format!("AI call failed: {}", e))?;
 
-    let final_choice = final_response
-        .choices
-        .first()
-        .ok_or("No choices in final response")?;
-
-    let content = final_choice.message.content.clone().unwrap_or_default();
+    let content = final_response.choices.first()
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_else(|| "任务已完成".to_string());
     let clean = clean_response(&content);
     let _ = database::save_conversation_message(account_id, "assistant", &clean);
     emit_agent_progress("done", json!({ "chars": clean.len() }));
@@ -465,68 +469,73 @@ pub async fn agent_process_message_with_images(
 
     info!("[agent] Multi-modal message with {} images", images.len());
 
-    // Single-pass agent (same as agent_process_message)
+    // Agent loop — same as agent_process_message
     let tool_defs = get_tool_definitions().await;
+    let max_iterations = 3;
 
-    // First AI call
-    let request = CreateChatCompletionRequestArgs::default()
-        .model(&ai.model)
-        .messages(messages.clone())
-        .tools(tool_defs.clone())
-        .build()
-        .map_err(|e| format!("Build request failed: {}", e))?;
+    for iteration in 0..max_iterations {
+        info!("[agent] Iteration {}, msgs={}", iteration, messages.len());
+        let request = CreateChatCompletionRequestArgs::default()
+            .model(&ai.model)
+            .messages(messages.clone())
+            .tools(tool_defs.clone())
+            .build()
+            .map_err(|e| format!("Build request failed: {}", e))?;
 
-    let response = client.chat().create(request).await
-        .map_err(|e| format!("AI call failed: {}", e))?;
+        let response = client.chat().create(request).await
+            .map_err(|e| format!("AI call failed: {}", e))?;
 
-    let choice = response.choices.first().ok_or("No choices")?;
-    let tool_calls = &choice.message.tool_calls;
-    let has_tools = tool_calls.as_ref().map_or(false, |tcs| !tcs.is_empty());
+        let choice = response.choices.first().ok_or("No choices")?;
+        let finish_reason = choice.finish_reason.as_ref()
+            .map(|r| format!("{:?}", r))
+            .unwrap_or_default()
+            .to_lowercase();
+        let has_tools = choice.message.tool_calls
+            .as_ref()
+            .map_or(false, |tcs| !tcs.is_empty());
 
-    if !has_tools {
-        let content = choice.message.content.clone().unwrap_or_default();
-        let clean = clean_response(&content);
-        let _ = database::save_conversation_message(account_id, "assistant", &clean);
-        return Ok(clean);
-    }
+        if finish_reason.contains("stop") || !has_tools {
+            let content = choice.message.content.clone().unwrap_or_default();
+            let clean = clean_response(&content);
+            let _ = database::save_conversation_message(account_id, "assistant", &clean);
+            return Ok(clean);
+        }
 
-    // Execute tool calls
-    let tcs = tool_calls.as_ref().unwrap();
-    let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
-        .tool_calls(tcs.clone())
-        .build()
-        .map_err(|e| e.to_string())?;
-    messages.push(assistant_msg.into());
-
-    for tc in tcs {
-        let tool_name = &tc.function.name;
-        info!("[agent] Tool call: {} (id={})", tool_name, tc.id);
-        let args: Value = serde_json::from_str(&tc.function.arguments).unwrap_or(json!({}));
-        let result = match execute_tool(tool_name, &args, Some(account_id)).await {
-            Ok(r) => r,
-            Err(e) => format!("Error: {}", e),
-        };
-        let tool_msg = ChatCompletionRequestToolMessageArgs::default()
-            .content(result)
-            .tool_call_id(tc.id.clone())
+        let tcs = choice.message.tool_calls.as_ref().unwrap();
+        let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
+            .tool_calls(tcs.clone())
             .build()
             .map_err(|e| e.to_string())?;
-        messages.push(tool_msg.into());
+        messages.push(assistant_msg.into());
+
+        for tc in tcs {
+            let tool_name = &tc.function.name;
+            info!("[agent] Tool call: {} (id={})", tool_name, tc.id);
+            let args: Value = serde_json::from_str(&tc.function.arguments).unwrap_or(json!({}));
+            let result = match execute_tool(tool_name, &args, Some(account_id)).await {
+                Ok(r) => r,
+                Err(e) => format!("Error: {}", e),
+            };
+            let tool_msg = ChatCompletionRequestToolMessageArgs::default()
+                .content(result)
+                .tool_call_id(tc.id.clone())
+                .build()
+                .map_err(|e| e.to_string())?;
+            messages.push(tool_msg.into());
+        }
     }
 
-    // Final AI call
+    // Force final text response
     let final_request = CreateChatCompletionRequestArgs::default()
         .model(&ai.model)
         .messages(messages.clone())
-        .tools(tool_defs)
         .build()
         .map_err(|e| format!("Build request failed: {}", e))?;
-
     let final_response = client.chat().create(final_request).await
         .map_err(|e| format!("AI call failed: {}", e))?;
-
-    let final_choice = final_response.choices.first().ok_or("No choices in final response")?;
-    let content = final_choice.message.content.clone().unwrap_or_default();
+    let content = final_response.choices.first()
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_else(|| "任务已完成".to_string());
     let clean = clean_response(&content);
     let _ = database::save_conversation_message(account_id, "assistant", &clean);
     Ok(clean)

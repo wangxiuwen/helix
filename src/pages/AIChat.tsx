@@ -457,12 +457,18 @@ function AIChat() {
                                     </div>
                                     <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[65%]">
                                         {agentStatus.length > 0 ? (
-                                            <div className="space-y-1 text-xs text-gray-500 dark:text-gray-400 font-mono">
-                                                {agentStatus.map((s, i) => (
-                                                    <div key={i} className="animate-in fade-in">{s}</div>
-                                                ))}
-                                                <span className="loading loading-dots loading-xs text-gray-400 ml-1" />
-                                            </div>
+                                            <details open className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                                                <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300 list-none flex items-center gap-1">
+                                                    <span className="text-[10px]">▶</span>
+                                                    {agentStatus[agentStatus.length - 1]}
+                                                    <span className="loading loading-dots loading-xs text-gray-400 ml-1" />
+                                                </summary>
+                                                <div className="mt-1 space-y-0.5 pl-3 border-l-2 border-gray-200 dark:border-gray-600">
+                                                    {agentStatus.slice(0, -1).map((s, i) => (
+                                                        <div key={i} className="opacity-60">{s}</div>
+                                                    ))}
+                                                </div>
+                                            </details>
                                         ) : (
                                             <span className="loading loading-dots loading-sm text-gray-400" />
                                         )}
