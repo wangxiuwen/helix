@@ -1,7 +1,16 @@
-//! Helix Agent — Powered by async-openai SDK.
+//! Helix Agent — Powered by agents-sdk.
 //!
-//! Clean agent loop: system prompt → user message → AI call → tool execution → repeat.
+//! Uses ConfigurableAgentBuilder for the agent loop with custom tools.
+//! Multi-modal (images) still uses async-openai directly for now.
 
+use agents_sdk::{
+    ConfigurableAgentBuilder, OpenAiConfig, OpenAiChatModel,
+    ToolResult, ToolContext, ToolParameterSchema,
+    state::AgentStateSnapshot,
+    persistence::InMemoryCheckpointer,
+};
+
+// async-openai still used for images (multi-modal) path
 use async_openai::{
     config::OpenAIConfig,
     types::{
@@ -16,10 +25,11 @@ use async_openai::{
     },
     Client,
 };
+
 use serde_json::{json, Value};
 use tracing::info;
 use tauri::Emitter;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
 use crate::modules::config::load_app_config;
 use crate::modules::database;
@@ -213,7 +223,7 @@ fn is_handled_command(input: &str) -> bool {
 // Core Agent Loop
 // ============================================================================
 
-/// Process a message through the agent loop.
+/// Process a message through the agent loop (powered by agents-sdk).
 /// Returns the final assistant response after all tool calls are resolved.
 pub async fn agent_process_message(
     account_id: &str,
@@ -232,189 +242,140 @@ pub async fn agent_process_message(
         return Err("API Key 未设置，请在设置中配置".to_string());
     }
 
-    // 3. Build async-openai client with configurable base URL
-    let openai_config = OpenAIConfig::new()
-        .with_api_base(&ai.base_url)
-        .with_api_key(&ai.api_key);
-    let client = Client::with_config(openai_config);
+    // 3. Build agents-sdk model with configurable base URL
+    // SDK api_url is the FULL endpoint (e.g. .../v1/chat/completions), not just base
+    let full_api_url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
+    let oai_config = OpenAiConfig::new(&ai.api_key, &ai.model)
+        .with_api_url(Some(full_api_url));
+    let model = Arc::new(
+        OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init failed: {}", e))?
+    );
 
-    // 4. Build messages
+    // 4. Build system prompt
     let system_prompt = build_system_prompt(&ai.system_prompt);
-    let mut messages: Vec<ChatCompletionRequestMessage> = Vec::new();
 
-    messages.push(
-        ChatCompletionRequestSystemMessageArgs::default()
-            .content(system_prompt.clone())
-            .build()
-            .map_err(|e| e.to_string())?
-            .into(),
-    );
+    // 5. Build tools — wrap our existing execute_tool dispatcher
+    let sdk_tools = build_sdk_tools().await;
 
-    // Load conversation history
-    let history = database::get_conversation_history(account_id, 50)?;
-    for h in &history {
-        match h.role.as_str() {
-            "user" => {
-                messages.push(
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(h.content.clone())
-                        .build()
-                        .map_err(|e| e.to_string())?
-                        .into(),
-                );
-            }
-            "assistant" => {
-                messages.push(
-                    ChatCompletionRequestAssistantMessageArgs::default()
-                        .content(h.content.clone())
-                        .build()
-                        .map_err(|e| e.to_string())?
-                        .into(),
-                );
-            }
-            _ => {}
-        }
-    }
+    // 6. Build agent
+    let agent = ConfigurableAgentBuilder::new("Helix AI Assistant")
+        .with_model(model)
+        .with_system_prompt(&system_prompt)
+        .with_tools(sdk_tools)
+        .with_checkpointer(Arc::new(InMemoryCheckpointer::new()))
+        .build()
+        .map_err(|e| format!("Agent build failed: {}", e))?;
 
-    // Current user message
-    messages.push(
-        ChatCompletionRequestUserMessageArgs::default()
-            .content(user_input.to_string())
-            .build()
-            .map_err(|e| e.to_string())?
-            .into(),
-    );
+    // 7. Save user message to DB
     let _ = database::save_conversation_message(account_id, "user", user_input);
 
-    // 5. Build tool definitions
-    let tool_defs = get_tool_definitions().await;
+    // 8. Load conversation history and build state
+    let history = database::get_conversation_history(account_id, 50)?;
+    let mut context_msg = String::new();
+    for h in &history {
+        context_msg.push_str(&format!("[{}]: {}\n", h.role, h.content));
+    }
+    let full_input = if context_msg.is_empty() {
+        user_input.to_string()
+    } else {
+        format!("{}\n[user]: {}", context_msg, user_input)
+    };
 
-    // 6. Agent loop — controlled by finish_reason, max 3 iterations
-    //    Standard agent pattern: loop until model says "stop" or max reached
     AGENT_CANCELLED.store(false, Ordering::SeqCst);
     super::tools::clear_sent_files();
-    let max_iterations = 20;
+    emit_agent_progress("thinking", json!({ "iteration": 0, "model": &ai.model }));
 
-    for iteration in 0..max_iterations {
-        if AGENT_CANCELLED.load(Ordering::SeqCst) {
-            return Err("⏹ 已停止".to_string());
-        }
-        info!("[agent] Iteration {}, msgs={}", iteration, messages.len());
-        emit_agent_progress("thinking", json!({ "iteration": iteration, "model": &ai.model }));
+    // 9. Run the agent
+    let state = Arc::new(AgentStateSnapshot::default());
+    let response = agent.handle_message(&full_input, state).await
+        .map_err(|e| format!("Agent error: {}", e))?;
 
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(&ai.model)
-            .messages(messages.clone())
-            .tools(tool_defs.clone())
-            .build()
-            .map_err(|e| format!("Build request failed: {}", e))?;
-
-        // Race API call against cancel signal
-        let chat = client.chat();
-        let api_future = chat.create(request);
-        let cancel_future = async {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                if AGENT_CANCELLED.load(Ordering::SeqCst) { break; }
-            }
-        };
-        let response = tokio::select! {
-            result = api_future => result.map_err(|e| format!("AI call failed: {}", e))?,
-            _ = cancel_future => {
-                emit_agent_progress("cancelled", json!({}));
-                return Err("⏹ 已停止".to_string());
-            }
-        };
-
-        let choice = response
-            .choices
-            .first()
-            .ok_or("No choices in AI response")?;
-
-        // Check finish_reason — the model tells us whether to continue or stop
-        let finish_reason = choice.finish_reason.as_ref()
-            .map(|r| format!("{:?}", r))
-            .unwrap_or_default()
-            .to_lowercase();
-
-        let has_tools = choice.message.tool_calls
-            .as_ref()
-            .map_or(false, |tcs| !tcs.is_empty());
-
-        // If finish_reason is "stop" or no tool calls → return final text
-        if finish_reason.contains("stop") || !has_tools {
-            let content = choice.message.content.clone().unwrap_or_default();
-            let clean = clean_response(&content);
-            let _ = database::save_conversation_message(account_id, "assistant", &clean);
-            emit_agent_progress("done", json!({ "chars": clean.len() }));
-            return Ok(clean);
-        }
-
-        // Model wants to call tools — execute them
-        let tcs = choice.message.tool_calls.as_ref().unwrap();
-        let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
-            .tool_calls(tcs.clone())
-            .build()
-            .map_err(|e| e.to_string())?;
-        messages.push(assistant_msg.into());
-
-        for tc in tcs {
-            if AGENT_CANCELLED.load(Ordering::SeqCst) {
-                return Err("⏹ 已停止".to_string());
-            }
-            let tool_name = &tc.function.name;
-            info!("[agent] Tool call: {} (id={})", tool_name, tc.id);
-            emit_agent_progress("tool_call", json!({ "name": tool_name, "args": &tc.function.arguments }));
-
-            let args: Value = serde_json::from_str(&tc.function.arguments)
-                .unwrap_or(json!({}));
-
-            let result = match execute_tool(tool_name, &args, Some(account_id)).await {
-                Ok(r) => r,
-                Err(e) => format!("Error: {}", e),
-            };
-
-            info!("[agent] Tool result: {} chars", result.len());
-            emit_agent_progress("tool_result", json!({ "name": tool_name, "chars": result.len(), "preview": &result[..result.len().min(200)] }));
-
-            let tool_msg = ChatCompletionRequestToolMessageArgs::default()
-                .content(result)
-                .tool_call_id(tc.id.clone())
-                .build()
-                .map_err(|e| e.to_string())?;
-            messages.push(tool_msg.into());
-        }
-        // Loop continues — next iteration will call AI again with tool results
-    }
-
-    // Max iterations reached — do one final call without tools to force text response
-    info!("[agent] Max iterations reached, forcing final response");
-    let final_request = CreateChatCompletionRequestArgs::default()
-        .model(&ai.model)
-        .messages(messages.clone())
-        .build()
-        .map_err(|e| format!("Build request failed: {}", e))?;
-
-    let chat = client.chat();
-    let api_future = chat.create(final_request);
-    let cancel_future = async {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if AGENT_CANCELLED.load(Ordering::SeqCst) { break; }
-        }
-    };
-    let final_response = tokio::select! {
-        result = api_future => result.map_err(|e| format!("AI call failed: {}", e))?,
-        _ = cancel_future => { return Err("⏹ 已停止".to_string()); }
-    };
-
-    let content = final_response.choices.first()
-        .and_then(|c| c.message.content.clone())
-        .unwrap_or_else(|| "任务已完成".to_string());
-    let clean = clean_response(&content);
+    let text = format!("{:?}", response);
+    let clean = clean_response(&text);
     let _ = database::save_conversation_message(account_id, "assistant", &clean);
     emit_agent_progress("done", json!({ "chars": clean.len() }));
     Ok(clean)
+}
+
+/// Build agents-sdk Tool wrappers for all our custom tools
+async fn build_sdk_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
+    let tool_defs = get_tool_definitions().await;
+    let mut sdk_tools: Vec<Arc<dyn agents_sdk::Tool>> = Vec::new();
+
+    for td in tool_defs {
+        let func = td.function.clone();
+        let name = func.name.clone();
+        let desc = func.description.clone().unwrap_or_default();
+        let params_json = func.parameters.clone()
+            .map(|p| serde_json::to_value(p).unwrap_or(json!({})))
+            .unwrap_or(json!({}));
+
+        // Convert our JSON schema to ToolParameterSchema
+        let properties = params_json.get("properties").cloned().unwrap_or(json!({}));
+        let required: Vec<String> = params_json.get("required")
+            .and_then(|r| r.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        // Convert properties from JSON schema to HashMap<String, ToolParameterSchema>
+        let properties_map = if let Some(props) = params_json.get("properties").and_then(|p| p.as_object()) {
+            let mut map = std::collections::HashMap::new();
+            for (key, val) in props {
+                let prop_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("string").to_string();
+                let prop_desc = val.get("description").and_then(|d| d.as_str()).map(String::from);
+                map.insert(key.clone(), ToolParameterSchema {
+                    schema_type: prop_type,
+                    description: prop_desc,
+                    properties: None,
+                    required: None,
+                    items: None,
+                    enum_values: None,
+                    default: None,
+                    additional: Default::default(),
+                });
+            }
+            Some(map)
+        } else {
+            None
+        };
+
+        let param_schema = ToolParameterSchema {
+            schema_type: "object".to_string(),
+            description: None,
+            properties: properties_map,
+            required: Some(required),
+            items: None,
+            enum_values: None,
+            default: None,
+            additional: Default::default(),
+        };
+
+        let tool_name = name.clone();
+        let t = agents_sdk::tool(
+            name,
+            desc,
+            param_schema,
+            move |args: Value, ctx: ToolContext| {
+                let tn = tool_name.clone();
+                async move {
+                    info!("[agent-sdk] Tool call: {}", tn);
+                    emit_agent_progress("tool_call", json!({ "name": &tn }));
+
+                    let result = match execute_tool(&tn, &args, None).await {
+                        Ok(r) => r,
+                        Err(e) => format!("Error: {}", e),
+                    };
+
+                    info!("[agent-sdk] Tool result: {} chars", result.len());
+                    emit_agent_progress("tool_result", json!({ "name": &tn, "chars": result.len() }));
+
+                    Ok(ToolResult::text(&ctx, result))
+                }
+            },
+        );
+        sdk_tools.push(t);
+    }
+
+    sdk_tools
 }
 
 /// Process a message with images through the agent loop (multi-modal).
