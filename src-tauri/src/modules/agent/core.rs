@@ -153,9 +153,8 @@ fn build_system_prompt(custom_prompt: &str) -> String {
            This will display a download card in the chat for the user to save it. \
            Do NOT paste the file contents as text. Do NOT just show the file path. \
            Always use `chat_send_file` for existing files.\n\
-         - **If multiple files match the same name**, only call `chat_send_file` ONCE \
-           for the most likely match (prefer ~/Downloads or ~/Desktop). \
-           Mention other matches in your text reply so the user can ask for a different one."
+         - **If multiple files match the same name**, do NOT send any file automatically. \
+           Instead, list all matches with numbered paths and ask the user which one they want."
             .to_string(),
     );
 
