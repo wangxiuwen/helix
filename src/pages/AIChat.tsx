@@ -457,9 +457,8 @@ function AIChat() {
                                     </div>
                                     <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[65%]">
                                         {agentStatus.length > 0 ? (
-                                            <details open className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                                                <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300 list-none flex items-center gap-1">
-                                                    <span className="text-[10px]">▶</span>
+                                            <details ref={el => { if (el && !el.hasAttribute('data-init')) { el.setAttribute('data-init', '1'); el.open = true; } }} className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                                                <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300">
                                                     {agentStatus[agentStatus.length - 1]}
                                                     <span className="loading loading-dots loading-xs text-gray-400 ml-1" />
                                                 </summary>

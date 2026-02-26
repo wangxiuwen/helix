@@ -3,6 +3,8 @@
 //! All tool logic lives here: definitions, dispatcher, and implementations.
 //! The agent loop in agent.rs calls into this module.
 
+use tracing::info;
+
 use async_openai::types::{
     ChatCompletionTool, ChatCompletionToolArgs, ChatCompletionToolType, FunctionObjectArgs,
 };
@@ -404,31 +406,18 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
 
     // Emit only path + metadata to frontend — NO file data travels through IPC.
     // Frontend opens native OS save dialog and copies directly from disk.
+    info!("[chat_send_file] Emitting file-attachment event: name={}, path={}", display_name, path);
     crate::modules::infra::log_bridge::emit_custom_event("file-attachment", serde_json::json!({
         "name": display_name,
         "path": path,
         "mime": mime,
         "size": size_str,
     }));
+    info!("[chat_send_file] Event emitted successfully");
 
     Ok(format!("✅ 文件「{}」({})已发送到对话框，用户可以点击「另存为」下载。", display_name, size_str))
 }
 
-
-fn base64_encode(bytes: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((bytes.len() + 2) / 3 * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = chunk[0] as usize;
-        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
-        result.push(CHARS[(b0 >> 2)] as char);
-        result.push(CHARS[((b0 & 3) << 4) | (b1 >> 4)] as char);
-        result.push(if chunk.len() > 1 { CHARS[((b1 & 15) << 2) | (b2 >> 6)] as char } else { '=' });
-        result.push(if chunk.len() > 2 { CHARS[b2 & 63] as char } else { '=' });
-    }
-    result
-}
 
 // ---- File Write ----
 async fn tool_file_write(args: &Value) -> Result<String, String> {
