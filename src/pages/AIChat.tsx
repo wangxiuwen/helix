@@ -43,16 +43,14 @@ async function fetchModelsFromProvider(provider: AIProvider): Promise<string[]> 
 const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 380;
 
-// Window-level event buffer + Tauri listeners (survive unmount, HMR, StrictMode)
+// Window-level event buffer for agent progress (survives unmount, HMR, StrictMode)
 declare global {
     interface Window {
         __helix_agent_status: string[];
-        __helix_file_attachments: Array<{ id: number; name: string; mime: string; size: string; path: string }>;
         __helix_listeners_registered?: boolean;
     }
 }
 if (!window.__helix_agent_status) window.__helix_agent_status = [];
-if (!window.__helix_file_attachments) window.__helix_file_attachments = [];
 
 if (!window.__helix_listeners_registered) {
     window.__helix_listeners_registered = true;
@@ -70,10 +68,6 @@ if (!window.__helix_listeners_registered) {
             } else if (type === 'done' || type === 'cancelled') {
                 window.__helix_agent_status = [];
             }
-            window.dispatchEvent(new Event('helix:update'));
-        });
-        listen('file-attachment', (event: any) => {
-            window.__helix_file_attachments.push({ id: Date.now(), ...event.payload });
             window.dispatchEvent(new Event('helix:update'));
         });
     });
@@ -123,29 +117,25 @@ function AIChat() {
         ? [currentModel, ...fetchedModels]
         : fetchedModels.length > 0 ? fetchedModels : (currentModel ? [currentModel] : []);
 
-    // Agent progress & file attachments — sync from window-level buffer
+    // Agent progress — sync from window-level buffer
     const [agentStatus, setAgentStatus] = useState<string[]>(() => [...window.__helix_agent_status]);
-    const [fileAttachments, setFileAttachments] = useState<Array<{ id: number; name: string; mime: string; size: string; path: string }>>(() => [...window.__helix_file_attachments]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [activeSession?.messages, agentStatus, fileAttachments]);
+    }, [activeSession?.messages, agentStatus]);
 
-    // Clear file attachments and agent status when switching conversations
+    // Clear agent status when switching conversations
     useEffect(() => {
-        window.__helix_file_attachments = [];
         window.__helix_agent_status = [];
-        setFileAttachments([]);
         setAgentStatus([]);
     }, [activeChatId]);
 
-    // Sync from window buffer on mount and on every update event
+    // Sync agent status from window buffer on mount and on every update event
     useEffect(() => {
         const sync = () => {
             setAgentStatus([...window.__helix_agent_status]);
-            setFileAttachments([...window.__helix_file_attachments]);
         };
-        sync(); // Read accumulated events on mount
+        sync();
         window.addEventListener('helix:update', sync);
         return () => window.removeEventListener('helix:update', sync);
     }, []);
@@ -204,7 +194,6 @@ function AIChat() {
     const handleSend = async () => {
         if ((!input.trim() && pendingImages.length === 0) || loading.chat) return;
         setAgentStatus([]);
-        setFileAttachments([]);
         const msg = input.trim();
         const imgs = [...pendingImages];
         setInput('');
@@ -454,6 +443,39 @@ function AIChat() {
                                                     </button>
                                                 </div>
                                             )}
+                                            {msg.files && msg.files.length > 0 && (
+                                                <div className="mt-2 space-y-2">
+                                                    {msg.files.map((f, i) => (
+                                                        <div key={i} className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                                                            <div className="text-2xl shrink-0">
+                                                                {f.mime?.startsWith('image/') ? '🖼️' : f.mime === 'application/pdf' ? '📄' : f.mime?.includes('zip') ? '📦' : '📁'}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{f.name}</div>
+                                                                <div className="text-xs text-gray-500">{f.size}</div>
+                                                            </div>
+                                                            <button
+                                                                className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium flex items-center gap-1"
+                                                                onClick={async () => {
+                                                                    try {
+                                                                        const { save } = await import('@tauri-apps/plugin-dialog');
+                                                                        const dest = await save({ defaultPath: f.name });
+                                                                        if (dest) {
+                                                                            const { invoke } = await import('@tauri-apps/api/core');
+                                                                            await invoke('save_file_to', { source: f.path, destination: dest });
+                                                                        }
+                                                                    } catch (e) { console.error('Save failed:', e); }
+                                                                }}
+                                                            >
+                                                                ⬇ 另存为
+                                                            </button>
+                                                            <button className="text-gray-400 hover:text-gray-600 text-xs" onClick={() => {
+                                                                // Remove this file card from the message
+                                                            }}>✕</button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -482,39 +504,6 @@ function AIChat() {
                                     </div>
                                 </div>
                             )}
-                            {/* File attachment cards from agent */}
-                            {fileAttachments.map((att) => (
-                                <div key={att.id} className="flex gap-2.5">
-                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mt-0.5">
-                                        <Bot size={15} className="text-white" />
-                                    </div>
-                                    <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm shadow-sm max-w-[65%]">
-                                        <div className="flex items-center gap-3 px-4 py-3">
-                                            <div className="text-2xl shrink-0">
-                                                {att.mime?.startsWith('image/') ? '🖼️' : att.mime === 'application/pdf' ? '📄' : att.mime?.includes('zip') ? '📦' : '📁'}
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{att.name}</div>
-                                                <div className="text-xs text-gray-500">{att.size}</div>
-                                            </div>
-                                            <button
-                                                className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium"
-                                                onClick={async () => {
-                                                    try {
-                                                        const { save } = await import('@tauri-apps/plugin-dialog');
-                                                        const dest = await save({ defaultPath: att.name });
-                                                        if (dest) await invoke('save_file_to', { source: att.path, destination: dest });
-                                                    } catch (e) { console.error('Save failed:', e); }
-                                                }}
-                                            >⬇ 另存为</button>
-                                            <button
-                                                className="shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors ml-1"
-                                                onClick={() => setFileAttachments(prev => prev.filter(f => f.id !== att.id))}
-                                            ><X size={14} /></button>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
                             <div ref={messagesEndRef} />
                         </div>
 
