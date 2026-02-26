@@ -299,11 +299,22 @@ pub async fn agent_process_message(
             .build()
             .map_err(|e| format!("Build request failed: {}", e))?;
 
-        let response = client
-            .chat()
-            .create(request)
-            .await
-            .map_err(|e| format!("AI call failed: {}", e))?;
+        // Race API call against cancel signal
+        let chat = client.chat();
+        let api_future = chat.create(request);
+        let cancel_future = async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if AGENT_CANCELLED.load(Ordering::SeqCst) { break; }
+            }
+        };
+        let response = tokio::select! {
+            result = api_future => result.map_err(|e| format!("AI call failed: {}", e))?,
+            _ = cancel_future => {
+                emit_agent_progress("cancelled", json!({}));
+                return Err("⏹ 已停止".to_string());
+            }
+        };
 
         let choice = response
             .choices
@@ -374,8 +385,18 @@ pub async fn agent_process_message(
         .build()
         .map_err(|e| format!("Build request failed: {}", e))?;
 
-    let final_response = client.chat().create(final_request).await
-        .map_err(|e| format!("AI call failed: {}", e))?;
+    let chat = client.chat();
+    let api_future = chat.create(final_request);
+    let cancel_future = async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if AGENT_CANCELLED.load(Ordering::SeqCst) { break; }
+        }
+    };
+    let final_response = tokio::select! {
+        result = api_future => result.map_err(|e| format!("AI call failed: {}", e))?,
+        _ = cancel_future => { return Err("⏹ 已停止".to_string()); }
+    };
 
     let content = final_response.choices.first()
         .and_then(|c| c.message.content.clone())
@@ -481,8 +502,18 @@ pub async fn agent_process_message_with_images(
             .build()
             .map_err(|e| format!("Build request failed: {}", e))?;
 
-        let response = client.chat().create(request).await
-            .map_err(|e| format!("AI call failed: {}", e))?;
+        let chat = client.chat();
+        let api_future = chat.create(request);
+        let cancel_future = async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if AGENT_CANCELLED.load(Ordering::SeqCst) { break; }
+            }
+        };
+        let response = tokio::select! {
+            result = api_future => result.map_err(|e| format!("AI call failed: {}", e))?,
+            _ = cancel_future => { return Err("⏹ 已停止".to_string()); }
+        };
 
         let choice = response.choices.first().ok_or("No choices")?;
         let finish_reason = choice.finish_reason.as_ref()
@@ -530,8 +561,18 @@ pub async fn agent_process_message_with_images(
         .messages(messages.clone())
         .build()
         .map_err(|e| format!("Build request failed: {}", e))?;
-    let final_response = client.chat().create(final_request).await
-        .map_err(|e| format!("AI call failed: {}", e))?;
+    let chat = client.chat();
+    let api_future = chat.create(final_request);
+    let cancel_future = async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if AGENT_CANCELLED.load(Ordering::SeqCst) { break; }
+        }
+    };
+    let final_response = tokio::select! {
+        result = api_future => result.map_err(|e| format!("AI call failed: {}", e))?,
+        _ = cancel_future => { return Err("⏹ 已停止".to_string()); }
+    };
     let content = final_response.choices.first()
         .and_then(|c| c.message.content.clone())
         .unwrap_or_else(|| "任务已完成".to_string());
