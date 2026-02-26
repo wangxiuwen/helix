@@ -284,7 +284,7 @@ pub async fn agent_process_message(
     //    Standard agent pattern: loop until model says "stop" or max reached
     AGENT_CANCELLED.store(false, Ordering::SeqCst);
     super::tools::clear_sent_files();
-    let max_iterations = 3;
+    let max_iterations = 20;
 
     for iteration in 0..max_iterations {
         if AGENT_CANCELLED.load(Ordering::SeqCst) {
@@ -471,7 +471,7 @@ pub async fn agent_process_message_with_images(
 
     // Agent loop — same as agent_process_message
     let tool_defs = get_tool_definitions().await;
-    let max_iterations = 3;
+    let max_iterations = 20;
 
     for iteration in 0..max_iterations {
         info!("[agent] Iteration {}, msgs={}", iteration, messages.len());
