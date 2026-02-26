@@ -1,18 +1,18 @@
-//! Agent Tools — Tool definitions and implementations for the AI agent.
+//! Agent Tools — Direct agents-sdk tool definitions.
 //!
-//! All tool logic lives here: definitions, dispatcher, and implementations.
-//! The agent loop in agent.rs calls into this module.
+//! Each tool is created via `agents_sdk::tool()` with its schema and handler.
+//! No intermediate JSON schema layer or dispatcher needed.
+
+use anyhow;
 
 use tracing::info;
 
-use async_openai::types::{
-    ChatCompletionTool, ChatCompletionToolArgs, ChatCompletionToolType, FunctionObjectArgs,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Stdio;
-use std::sync::Mutex;
-use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+
+use agents_sdk::{ToolResult, ToolContext, ToolParameterSchema};
 
 /// Tracks files sent in the current agent session (metadata for response).
 static SENT_FILES: std::sync::LazyLock<Mutex<Vec<Value>>> =
@@ -20,15 +20,15 @@ static SENT_FILES: std::sync::LazyLock<Mutex<Vec<Value>>> =
 
 /// Call at the start of each agent call to reset sent-file tracking.
 pub fn clear_sent_files() {
-    if let Ok(mut v) = SENT_FILES.lock() {
-        v.clear();
+    if let Ok(mut files) = SENT_FILES.lock() {
+        files.clear();
     }
 }
 
 /// Get and clear sent files metadata (called by agent_chat to include in response)
 pub fn take_sent_files() -> Vec<Value> {
-    if let Ok(mut v) = SENT_FILES.lock() {
-        std::mem::take(&mut *v)
+    if let Ok(mut files) = SENT_FILES.lock() {
+        std::mem::take(&mut *files)
     } else {
         Vec::new()
     }
@@ -51,7 +51,6 @@ fn get_sandbox_path() -> String {
 /// Returns the canonicalized path if valid, or an error message.
 fn validate_sandbox_path(path: &str) -> Result<String, String> {
     let sandbox = get_sandbox_path();
-    // Auto-create sandbox dir
     let _ = std::fs::create_dir_all(&sandbox);
     
     let expanded = expand_path(path);
@@ -61,17 +60,14 @@ fn validate_sandbox_path(path: &str) -> Result<String, String> {
         format!("{}/{}", sandbox, expanded)
     };
     
-    // Normalize path (resolve .., etc)
     let canonical_sandbox = std::fs::canonicalize(&sandbox)
         .unwrap_or_else(|_| std::path::PathBuf::from(&sandbox));
     
-    // For new files, check the parent exists within sandbox
     let path_buf = std::path::PathBuf::from(&abs_path);
     let check_path = if path_buf.exists() {
         std::fs::canonicalize(&abs_path)
             .unwrap_or_else(|_| path_buf.clone())
     } else {
-        // For new files, resolve the parent
         if let Some(parent) = path_buf.parent() {
             let _ = std::fs::create_dir_all(parent);
             let resolved_parent = std::fs::canonicalize(parent)
@@ -93,15 +89,13 @@ fn validate_sandbox_path(path: &str) -> Result<String, String> {
 }
 
 
-
 // ============================================================================
 // Legacy Types — kept for plugins.rs manifest parsing
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
-    #[serde(rename = "type")]
-    pub tool_type: String,
+    pub r#type: String,
     pub function: ToolFunctionDef,
 }
 
@@ -112,159 +106,262 @@ pub struct ToolFunctionDef {
     pub parameters: Value,
 }
 
-
 // ============================================================================
-// Tool Definitions — returns async-openai types
+// Schema Helpers
 // ============================================================================
 
-pub async fn get_tool_definitions() -> Vec<ChatCompletionTool> {
-    let tool = |name: &str, desc: &str, params: Value| -> ChatCompletionTool {
-        ChatCompletionToolArgs::default()
-            .r#type(ChatCompletionToolType::Function)
-            .function(
-                FunctionObjectArgs::default()
-                    .name(name)
-                    .description(desc)
-                    .parameters(params)
-                    .build()
-                    .unwrap(),
-            )
-            .build()
-            .unwrap()
-    };
-
-    let native_tools = vec![
-        tool("shell_exec",
-            "Execute a shell command on the system and return stdout/stderr.",
-            json!({"type":"object","properties":{"command":{"type":"string"},"working_dir":{"type":"string"},"timeout_secs":{"type":"integer"}},"required":["command"]}),
-        ),
-        tool("file_read",
-            "Read the contents of a file.",
-            json!({"type":"object","properties":{"path":{"type":"string"},"max_lines":{"type":"integer"}},"required":["path"]}),
-        ),
-        tool("file_write",
-            &format!("Write content to a file. Creates if new, overwrites if exists. RESTRICTED: files can only be written inside ~/{}/", SANDBOX_DIR),
-            json!({"type":"object","properties":{"path":{"type":"string","description":format!("File path (relative paths are resolved inside ~/{}/)", SANDBOX_DIR)},"content":{"type":"string"},"append":{"type":"boolean"}},"required":["path","content"]}),
-        ),
-        tool("file_edit",
-            &format!("Edit a file by replacing specific text. RESTRICTED: only files inside ~/{}/", SANDBOX_DIR),
-            json!({"type":"object","properties":{"path":{"type":"string"},"search":{"type":"string"},"replace":{"type":"string"},"all":{"type":"boolean"}},"required":["path","search","replace"]}),
-        ),
-        tool("web_fetch",
-            "Fetch content from a URL. Returns the response body as text.",
-            json!({"type":"object","properties":{"url":{"type":"string"},"method":{"type":"string"},"headers":{"type":"object"},"body":{"type":"string"}},"required":["url"]}),
-        ),
-        tool("web_search",
-            "Search the web using a search engine.",
-            json!({"type":"object","properties":{"query":{"type":"string"},"num_results":{"type":"integer"}},"required":["query"]}),
-        ),
-        tool("memory_store",
-            "Store a piece of information in long-term memory with a key.",
-            json!({"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"}},"required":["key","value"]}),
-        ),
-        tool("memory_recall",
-            "Recall stored information from long-term memory.",
-            json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}),
-        ),
-        tool("list_dir",
-            "List files and directories in a given path.",
-            json!({"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"},"max_depth":{"type":"integer"}},"required":["path"]}),
-        ),
-        tool("grep_search",
-            "Search for a text pattern in files using grep.",
-            json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"include":{"type":"string"},"ignore_case":{"type":"boolean"},"max_results":{"type":"integer"}},"required":["pattern","path"]}),
-        ),
-        tool("find_files",
-            "Find files and directories by name pattern.",
-            json!({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"},"file_type":{"type":"string"},"max_depth":{"type":"integer"},"max_results":{"type":"integer"}},"required":["path"]}),
-        ),
-        tool("process_list",
-            "List running processes.",
-            json!({"type":"object","properties":{"filter":{"type":"string"},"sort_by":{"type":"string"},"limit":{"type":"integer"}},"required":[]}),
-        ),
-        tool("process_kill",
-            "Kill a process by PID or name.",
-            json!({"type":"object","properties":{"pid":{"type":"integer"},"name":{"type":"string"},"signal":{"type":"string"}},"required":[]}),
-        ),
-        tool("sysinfo",
-            "Get system information including OS, CPU, memory, disk usage.",
-            json!({"type":"object","properties":{"section":{"type":"string"}},"required":[]}),
-        ),
-        tool("browser_launch",
-            "Launch the headless browser session.",
-            json!({"type":"object","properties":{},"required":[]}),
-        ),
-        tool("browser_goto",
-            "Navigate the browser to a URL and extract its Semantic Accessibility Tree.",
-            json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}),
-        ),
-        tool("browser_click",
-            "Click an interactive element on the page using its ref_id.",
-            json!({"type":"object","properties":{"ref_id":{"type":"string"}},"required":["ref_id"]}),
-        ),
-        tool("browser_fill",
-            "Fill text into an input element using its ref_id.",
-            json!({"type":"object","properties":{"ref_id":{"type":"string"},"text":{"type":"string"}},"required":["ref_id","text"]}),
-        ),
-        tool("chat_send_file",
-            "Send a file directly to the user in this chat dialog so they can download it. Use this whenever the user asks you to 'give them', 'send them', or 'share' a file.",
-            json!({"type":"object","properties":{"path":{"type":"string","description":"Absolute path to the file to send"},"display_name":{"type":"string","description":"Optional display name for the file"}},"required":["path"]}),
-        ),
-
-    ];
-
-    // Merge with plugin tools
-    // TODO: Plugin tools need to be converted to async-openai types too
-    native_tools
+fn param(name: &str, ptype: &str, desc: Option<&str>) -> (String, ToolParameterSchema) {
+    (name.to_string(), ToolParameterSchema {
+        schema_type: ptype.to_string(),
+        description: desc.map(String::from),
+        properties: None,
+        required: None,
+        items: None,
+        enum_values: None,
+        default: None,
+        additional: Default::default(),
+    })
 }
 
-// ============================================================================
-// Tool Dispatcher
-// ============================================================================
-
-pub async fn execute_tool(name: &str, args: &Value, ctx: Option<&str>) -> Result<String, String> {
-    match name {
-        "shell_exec" => tool_shell_exec(args).await,
-        "file_read" => tool_file_read(args).await,
-        "chat_send_file" => tool_chat_send_file(args).await,
-        "file_write" => tool_file_write(args).await,
-        "file_edit" => tool_file_edit(args).await,
-        "web_fetch" => tool_web_fetch(args).await,
-        "web_search" => tool_web_search(args).await,
-        "memory_store" => tool_memory_store(args).await,
-        "memory_recall" => tool_memory_recall(args).await,
-        "list_dir" => tool_list_dir(args).await,
-        "grep_search" => tool_grep_search(args).await,
-        "find_files" => tool_find_files(args).await,
-        "process_list" => tool_process_list(args).await,
-        "process_kill" => tool_process_kill(args).await,
-        "sysinfo" => tool_sysinfo(args).await,
-        "browser_launch" => crate::modules::browser_engine::BrowserSession::launch()
-            .await
-            .map(|_| "Browser launched".to_string()),
-        "browser_goto" => {
-            let url = args["url"].as_str().unwrap_or("");
-            crate::modules::browser_engine::BrowserSession::goto(url).await
-        }
-        "browser_click" => {
-            let ref_id = args["ref_id"].as_str().unwrap_or("");
-            crate::modules::browser_engine::BrowserSession::click(ref_id).await
-        }
-        "browser_fill" => {
-            let ref_id = args["ref_id"].as_str().unwrap_or("");
-            let text = args["text"].as_str().unwrap_or("");
-            crate::modules::browser_engine::BrowserSession::fill(ref_id, text).await
-        }
-        _ => {
-            let registry = crate::modules::plugins::PluginRegistry::load_plugins().await;
-            if let Some(plugin_path) = registry.tools.get(name) {
-                crate::modules::plugins::PluginRegistry::execute_tool(plugin_path, name, args).await
-            } else {
-                Err(format!("Unknown tool: {}", name))
-            }
-        }
+fn schema(props: Vec<(String, ToolParameterSchema)>, required: Vec<&str>) -> ToolParameterSchema {
+    let mut map = std::collections::HashMap::new();
+    for (k, v) in props {
+        map.insert(k, v);
+    }
+    ToolParameterSchema {
+        schema_type: "object".to_string(),
+        description: None,
+        properties: Some(map),
+        required: Some(required.into_iter().map(String::from).collect()),
+        items: None,
+        enum_values: None,
+        default: None,
+        additional: Default::default(),
     }
 }
+
+// ============================================================================
+// Build All Tools — returns Vec<Arc<dyn Tool>> for agents-sdk
+// ============================================================================
+
+pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
+    vec![
+        agents_sdk::tool(
+            "shell_exec",
+            "Execute a shell command on the system and return stdout/stderr.",
+            schema(vec![
+                param("command", "string", Some("The shell command to execute")),
+                param("working_dir", "string", Some("Working directory (default: home)")),
+                param("timeout_secs", "integer", Some("Timeout in seconds (default: 30)")),
+            ], vec!["command"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_shell_exec(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "file_read",
+            "Read the contents of a file.",
+            schema(vec![
+                param("path", "string", Some("Path to the file to read")),
+                param("max_lines", "integer", Some("Max lines to return (default: 500)")),
+            ], vec!["path"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_file_read(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "file_write",
+            &format!("Write content to a file. RESTRICTED: files can only be written inside ~/{}/", SANDBOX_DIR),
+            schema(vec![
+                param("path", "string", Some(&format!("File path (relative = inside ~/{}/)", SANDBOX_DIR))),
+                param("content", "string", Some("Content to write")),
+                param("append", "boolean", Some("Append instead of overwrite")),
+            ], vec!["path", "content"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_file_write(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "file_edit",
+            &format!("Edit a file by replacing text. RESTRICTED: only files inside ~/{}/", SANDBOX_DIR),
+            schema(vec![
+                param("path", "string", None),
+                param("search", "string", Some("Text to find")),
+                param("replace", "string", Some("Replacement text")),
+                param("all", "boolean", Some("Replace all occurrences")),
+            ], vec!["path", "search", "replace"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_file_edit(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "web_fetch",
+            "Fetch content from a URL. Supports GET/POST/PUT/DELETE with custom headers.",
+            schema(vec![
+                param("url", "string", Some("URL to fetch")),
+                param("method", "string", Some("HTTP method (default: GET)")),
+                param("headers", "object", Some("Custom headers")),
+                param("body", "string", Some("Request body")),
+            ], vec!["url"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_web_fetch(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "web_search",
+            "Search the web. Also handles weather queries and hot searches.",
+            schema(vec![
+                param("query", "string", Some("Search query")),
+                param("num_results", "integer", Some("Number of results (default: 5)")),
+            ], vec!["query"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_web_search(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "memory_store",
+            "Store information in long-term memory with a key.",
+            schema(vec![
+                param("key", "string", Some("Memory key")),
+                param("value", "string", Some("Content to store")),
+            ], vec!["key", "value"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_memory_store(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "memory_recall",
+            "Recall stored information from long-term memory.",
+            schema(vec![
+                param("query", "string", Some("Search query for memories")),
+            ], vec!["query"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_memory_recall(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "list_dir",
+            "List files and directories in a given path.",
+            schema(vec![
+                param("path", "string", Some("Directory path")),
+                param("recursive", "boolean", Some("List recursively")),
+                param("max_depth", "integer", Some("Max directory depth (default: 1)")),
+            ], vec!["path"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_list_dir(&args).map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "grep_search",
+            "Search for a text pattern in files using grep.",
+            schema(vec![
+                param("pattern", "string", Some("Text pattern to search")),
+                param("path", "string", Some("Directory or file to search in")),
+                param("include", "string", Some("File glob filter (e.g. *.rs)")),
+                param("ignore_case", "boolean", None),
+                param("max_results", "integer", None),
+            ], vec!["pattern", "path"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_grep_search(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "find_files",
+            "Find files and directories by name pattern.",
+            schema(vec![
+                param("path", "string", Some("Root directory to search")),
+                param("name", "string", Some("File name pattern (e.g. *.pdf)")),
+                param("max_depth", "integer", None),
+                param("max_results", "integer", None),
+            ], vec!["path"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_find_files(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "process_list",
+            "List running processes with CPU/memory usage.",
+            schema(vec![
+                param("filter", "string", Some("Filter by process name")),
+                param("limit", "integer", Some("Max number of results")),
+            ], vec![]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_process_list(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "process_kill",
+            "Kill a process by PID or name.",
+            schema(vec![
+                param("pid", "integer", Some("Process ID to kill")),
+                param("name", "string", Some("Process name to kill")),
+                param("signal", "string", Some("Signal (default: TERM)")),
+            ], vec![]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_process_kill(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "sysinfo",
+            "Get system information: OS, CPU, memory, disk, uptime.",
+            schema(vec![], vec![]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_sysinfo(&args).map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "chat_send_file",
+            "Send a file to the user as a downloadable attachment in the chat.",
+            schema(vec![
+                param("path", "string", Some("Absolute path to the file to send")),
+            ], vec!["path"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_chat_send_file(&args).await.map_err(anyhow::Error::msg)?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+    ]
+}
+
+// ============================================================================
+// Backward-compat dispatcher — used by subagents.rs and api_server.rs
+// ============================================================================
+
+pub async fn execute_tool(name: &str, args: &Value, _ctx: Option<&str>) -> Result<String, String> {
+    match name {
+        "shell_exec"     => tool_shell_exec(args).await,
+        "file_read"      => tool_file_read(args).await,
+        "file_write"     => tool_file_write(args).await,
+        "file_edit"      => tool_file_edit(args).await,
+        "web_fetch"      => tool_web_fetch(args).await,
+        "web_search"     => tool_web_search(args).await,
+        "memory_store"   => tool_memory_store(args).await,
+        "memory_recall"  => tool_memory_recall(args).await,
+        "list_dir"       => tool_list_dir(args),
+        "grep_search"    => tool_grep_search(args).await,
+        "find_files"     => tool_find_files(args).await,
+        "process_list"   => tool_process_list(args).await,
+        "process_kill"   => tool_process_kill(args).await,
+        "sysinfo"        => tool_sysinfo(args),
+        "chat_send_file" => tool_chat_send_file(args).await,
+        other => Err(format!("Unknown tool: {}", other)),
+    }
+}
+
 
 // ============================================================================
 // Tool Implementations
@@ -292,7 +389,6 @@ async fn tool_shell_exec(args: &Value) -> Result<String, String> {
         });
     let timeout = args["timeout_secs"].as_u64().unwrap_or(30);
 
-    // Use login shell to inherit user's full PATH
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(timeout),
         if cfg!(target_os = "macos") {
@@ -354,7 +450,7 @@ async fn tool_file_read(args: &Value) -> Result<String, String> {
     }
 }
 
-// ---- Chat Send File (delivers a file as a downloadable attachment in the chat) ----
+// ---- Chat Send File ----
 async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
     let path = expand_path(args["path"].as_str().ok_or("Missing 'path'")?);
     let display_name = args["display_name"]
@@ -367,7 +463,6 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         })
         .to_string();
 
-    // Verify file exists
     let meta = tokio::fs::metadata(&path)
         .await
         .map_err(|e| format!("Cannot access '{}': {}", path, e))?;
@@ -381,7 +476,6 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         format!("{} B", size_bytes)
     };
 
-    // Detect mime type from extension
     let ext = std::path::Path::new(&path)
         .extension()
         .and_then(|e| e.to_str())
@@ -405,14 +499,12 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         _            => "application/octet-stream",
     };
 
-    // Deduplicate by path within this agent session
     if let Ok(files) = SENT_FILES.lock() {
         if files.iter().any(|f| f["path"].as_str() == Some(&path)) {
             return Ok(format!("文件「{}」已经发送过了，无需重复发送。", display_name));
         }
     }
 
-    // Store file metadata — will be included in agent_chat response
     let file_meta = json!({
         "name": display_name,
         "path": path,
@@ -435,7 +527,6 @@ async fn tool_file_write(args: &Value) -> Result<String, String> {
     let content = args["content"].as_str().ok_or("Missing 'content'")?;
     let append = args["append"].as_bool().unwrap_or(false);
 
-    // Create parent dirs
     if let Some(parent) = std::path::Path::new(&path).parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -759,7 +850,7 @@ async fn tool_memory_recall(args: &Value) -> Result<String, String> {
 }
 
 // ---- List Dir ----
-async fn tool_list_dir(args: &Value) -> Result<String, String> {
+fn tool_list_dir(args: &Value) -> Result<String, String> {
     let path = expand_path(args["path"].as_str().ok_or("Missing 'path'")?);
     let recursive = args["recursive"].as_bool().unwrap_or(false);
     let max_depth = args["max_depth"].as_u64().unwrap_or(1) as usize;
@@ -920,7 +1011,7 @@ async fn tool_process_kill(args: &Value) -> Result<String, String> {
 }
 
 // ---- System Info ----
-async fn tool_sysinfo(_args: &Value) -> Result<String, String> {
+fn tool_sysinfo(_args: &Value) -> Result<String, String> {
     use sysinfo::System;
     let mut sys = System::new_all();
     sys.refresh_all();
@@ -1027,7 +1118,6 @@ pub struct BashExecResult {
 
 #[tauri::command]
 pub async fn tool_web_search_cmd(_query: String, _count: Option<u32>, _api_key: Option<String>) -> Result<Vec<WebSearchResult>, String> {
-    // Legacy: returns empty since we don't use Brave anymore
     Ok(vec![])
 }
 
