@@ -147,9 +147,12 @@ fn build_system_prompt(custom_prompt: &str) -> String {
            save/create a file at a specific path.\n\
          - **You are running in the Helix desktop app — NOT WeChat**. \
            You have NO access to WeChat, WeChat File Transfer, or any WeChat API. \
-           Never suggest sending files via WeChat. \
-           When the user asks for a file or document, return its content directly \
-           in this chat dialog (e.g. as a markdown code block)."
+           Never mention WeChat.\n\
+         - **When the user asks you to send/share/give them an EXISTING file** (PDF, image, zip, etc.), \
+           you MUST use the `chat_send_file` tool with the file's absolute path. \
+           This will display a download card in the chat for the user to save it. \
+           Do NOT paste the file contents as text. Do NOT just show the file path. \
+           Always use `chat_send_file` for existing files."
             .to_string(),
     );
 
