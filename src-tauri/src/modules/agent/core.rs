@@ -141,6 +141,10 @@ fn build_system_prompt(custom_prompt: &str) -> String {
          - If a command fails, analyze the error and try to fix it\n\
          - Be concise but thorough\n\
          - If you detect the user's language (e.g. Chinese), respond in the same language\n\
+         - **CRITICAL: Use tools ONLY when the user explicitly asks you to perform an action** \
+           (search files, run commands, send files, etc.). For normal conversation, questions, \
+           or chitchat (e.g. '你好', '你几岁了', 'what is X'), respond directly in text \
+           WITHOUT calling any tools. Do NOT use tools proactively.\n\
          - **IMPORTANT: Do NOT create files on disk to deliver content to the user**. \
            Instead, return all generated content (code, text, documents, data) directly \
            in your chat response. Only write files when the user explicitly asks to \
