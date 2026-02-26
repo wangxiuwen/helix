@@ -56,6 +56,7 @@ export interface ChatMessage {
     content: string;
     timestamp: string;
     model?: string;
+    images?: string[];  // base64 data URLs for image messages
     toolCalls?: Array<{ name: string; args: Record<string, any>; result?: string; status?: 'pending' | 'done' | 'error' }>;
     pendingConfirm?: { toolName: string; args: Record<string, any>; description: string };
 }
@@ -182,7 +183,7 @@ interface helixState {
     createChatSession: (title?: string) => string;
     deleteChatSession: (id: string) => void;
     setActiveChatId: (id: string | null) => void;
-    sendMessage: (sessionId: string, content: string) => Promise<void>;
+    sendMessage: (sessionId: string, content: string, images?: string[]) => Promise<void>;
     confirmToolExecution: (sessionId: string, messageId: string) => Promise<void>;
 
     // Task
@@ -325,7 +326,7 @@ export const useDevOpsStore = create<helixState>()(
                 })),
             setActiveChatId: (id) => set({ activeChatId: id }),
 
-            sendMessage: async (sessionId, content) => {
+            sendMessage: async (sessionId, content, images) => {
                 const state = get();
                 const session = state.chatSessions.find((s) => s.id === sessionId);
                 if (!session) return;
@@ -335,7 +336,7 @@ export const useDevOpsStore = create<helixState>()(
                     chatSessions: s.chatSessions.map((cs) =>
                         cs.id === sessionId ? {
                             ...cs,
-                            messages: [...cs.messages, { id: generateId(), role: 'user' as const, content, timestamp: new Date().toISOString() }],
+                            messages: [...cs.messages, { id: generateId(), role: 'user' as const, content, images, timestamp: new Date().toISOString() }],
                             updatedAt: new Date().toISOString(),
                         } : cs
                     ),
@@ -343,13 +344,37 @@ export const useDevOpsStore = create<helixState>()(
                 }));
 
                 try {
-                    // Call Rust backend agent_chat which handles everything:
-                    // system prompt, tools, agent loop, memory
                     const { invoke } = await import('@tauri-apps/api/core');
                     const accountId = `chat:${sessionId}`;
+
+                    // Ensure backend config is up-to-date with current provider/model
+                    const active = get().aiProviders.find(p => p.enabled);
+                    const currentModel = active?.defaultModel || active?.models?.[0] || '';
+                    if (active) {
+                        await invoke('ai_set_config', {
+                            provider: active.type,
+                            baseUrl: active.baseUrl || '',
+                            apiKey: active.apiKey || '',
+                            model: currentModel,
+                        });
+                    }
+
+                    // If model changed since last message in this session, clear backend history
+                    const sess = get().chatSessions.find(cs => cs.id === sessionId);
+                    if (sess && sess.model && sess.model !== currentModel) {
+                        await invoke('agent_clear_history', { accountId }).catch(() => { });
+                    }
+                    // Track current model on session
+                    set((s) => ({
+                        chatSessions: s.chatSessions.map((cs) =>
+                            cs.id === sessionId ? { ...cs, model: currentModel } : cs
+                        ),
+                    }));
+
                     const result = await invoke<{ content: string }>('agent_chat', {
                         accountId,
                         content,
+                        images: images || [],
                     });
 
                     const assistantMsg: ChatMessage = {
