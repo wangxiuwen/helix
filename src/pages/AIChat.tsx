@@ -100,6 +100,12 @@ function AIChat() {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [activeSession?.messages, agentStatus, fileAttachments]);
 
+    // Clear file attachments and agent status when switching conversations
+    useEffect(() => {
+        setFileAttachments([]);
+        setAgentStatus([]);
+    }, [activeChatId]);
+
     // Listen for agent-progress events from Rust backend
     // One-shot registration: flag never resets, listener lives for app lifetime
     useEffect(() => {
@@ -190,6 +196,7 @@ function AIChat() {
     const handleSend = async () => {
         if ((!input.trim() && pendingImages.length === 0) || loading.chat) return;
         setAgentStatus([]);
+        setFileAttachments([]);
         const msg = input.trim();
         const imgs = [...pendingImages];
         setInput('');
