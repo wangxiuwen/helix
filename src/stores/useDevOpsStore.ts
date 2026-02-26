@@ -224,82 +224,7 @@ function generateId() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 }
 
-// ========== AI call with function calling ==========
 
-// @ts-ignore: kept for future use
-async function _callAI(
-    provider: AIProvider,
-    messages: Array<{ role: string; content: string }>,
-    tools?: any[]
-): Promise<{ content: string; toolCalls?: Array<{ name: string; arguments: string }> }> {
-    const model = provider.defaultModel || provider.models[0];
-
-    if (provider.type === 'openai' || provider.type === 'custom') {
-        const body: any = { model, messages, stream: false };
-        if (tools && tools.length > 0) body.tools = tools;
-        const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-            body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        const choice = data.choices?.[0];
-        const msg = choice?.message;
-        return {
-            content: msg?.content || '',
-            toolCalls: msg?.tool_calls?.map((tc: any) => ({
-                name: tc.function.name,
-                arguments: tc.function.arguments,
-            })),
-        };
-    } else if (provider.type === 'anthropic') {
-        const body: any = {
-            model,
-            max_tokens: 4096,
-            system: messages[0]?.role === 'system' ? messages[0].content : undefined,
-            messages: messages.filter(m => m.role !== 'system').map(m => ({
-                role: m.role === 'system' ? 'user' : m.role,
-                content: m.content,
-            })),
-        };
-        if (tools && tools.length > 0) {
-            body.tools = tools.map((t: any) => ({
-                name: t.function.name,
-                description: t.function.description,
-                input_schema: t.function.parameters,
-            }));
-        }
-        const res = await fetch(`${provider.baseUrl}/v1/messages`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': provider.apiKey!,
-                'anthropic-version': '2023-06-01',
-                'anthropic-dangerous-direct-browser-access': 'true',
-            },
-            body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        const textBlock = data.content?.find((b: any) => b.type === 'text');
-        const toolUse = data.content?.filter((b: any) => b.type === 'tool_use');
-        return {
-            content: textBlock?.text || '',
-            toolCalls: toolUse?.length ? toolUse.map((tu: any) => ({
-                name: tu.name,
-                arguments: JSON.stringify(tu.input),
-            })) : undefined,
-        };
-    } else if (provider.type === 'ollama') {
-        const res = await fetch(`${provider.baseUrl}/api/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, messages, stream: false }),
-        });
-        const data = await res.json();
-        return { content: data.message?.content || '(无响应)' };
-    }
-    return { content: '(不支持的提供商类型)' };
-}
 
 // ========== Store Implementation ==========
 
@@ -443,7 +368,7 @@ export const useDevOpsStore = create<helixState>()(
                 } catch (err: any) {
                     const errorMsg: ChatMessage = {
                         id: generateId(), role: 'assistant',
-                        content: `❌ 请求失败: ${typeof err === 'string' ? err : err.message || JSON.stringify(err)}`,
+                        content: `❌ 请求失败: ${typeof err === 'string' ? err : err?.message || JSON.stringify(err)}`,
                         timestamp: new Date().toISOString(),
                     };
                     set((s) => ({

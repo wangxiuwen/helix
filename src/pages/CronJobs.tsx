@@ -115,7 +115,7 @@ function CronJobs() {
         <>
             {/* Left: Task list */}
             <div className="w-[250px] shrink-0 bg-[#f7f7f7] dark:bg-[#252525] flex flex-col border-r border-black/5 dark:border-white/5">
-                <div className="px-3 pt-4 pb-2 flex items-center justify-between">
+                <div className="px-3 pt-4 pb-2 flex items-center justify-between" data-tauri-drag-region>
                     <span className="text-xs text-gray-400">{tasks.length} 个任务</span>
                     <div className="flex items-center gap-1">
                         <button onClick={loadTasks} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="刷新">
