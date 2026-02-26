@@ -469,9 +469,7 @@ function AIChat() {
                                                             >
                                                                 ⬇ 另存为
                                                             </button>
-                                                            <button className="text-gray-400 hover:text-gray-600 text-xs" onClick={() => {
-                                                                // Remove this file card from the message
-                                                            }}>✕</button>
+
                                                         </div>
                                                     ))}
                                                 </div>

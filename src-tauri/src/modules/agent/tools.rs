@@ -3,16 +3,26 @@
 //! Each tool is created via `agents_sdk::tool()` with its schema and handler.
 //! No intermediate JSON schema layer or dispatcher needed.
 
-use anyhow;
 
 use tracing::info;
 
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use agents_sdk::{ToolResult, ToolContext, ToolParameterSchema};
+
+/// Shared HTTP client — reused across all web tools for connection pooling.
+static SHARED_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    });
+
 
 /// Tracks files sent in the current agent session (metadata for response).
 static SENT_FILES: std::sync::LazyLock<Mutex<Vec<Value>>> =
@@ -89,22 +99,6 @@ fn validate_sandbox_path(path: &str) -> Result<String, String> {
 }
 
 
-// ============================================================================
-// Legacy Types — kept for plugins.rs manifest parsing
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub r#type: String,
-    pub function: ToolFunctionDef,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolFunctionDef {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-}
 
 // ============================================================================
 // Schema Helpers
@@ -155,7 +149,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("timeout_secs", "integer", Some("Timeout in seconds (default: 30)")),
             ], vec!["command"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_shell_exec(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_shell_exec(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -167,7 +161,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("max_lines", "integer", Some("Max lines to return (default: 500)")),
             ], vec!["path"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_file_read(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_file_read(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -180,7 +174,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("append", "boolean", Some("Append instead of overwrite")),
             ], vec!["path", "content"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_file_write(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_file_write(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -194,7 +188,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("all", "boolean", Some("Replace all occurrences")),
             ], vec!["path", "search", "replace"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_file_edit(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_file_edit(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -208,7 +202,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("body", "string", Some("Request body")),
             ], vec!["url"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_web_fetch(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_web_fetch(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -220,7 +214,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("num_results", "integer", Some("Number of results (default: 5)")),
             ], vec!["query"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_web_search(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_web_search(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -232,7 +226,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("value", "string", Some("Content to store")),
             ], vec!["key", "value"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_memory_store(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_memory_store(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -243,7 +237,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("query", "string", Some("Search query for memories")),
             ], vec!["query"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_memory_recall(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_memory_recall(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -256,7 +250,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("max_depth", "integer", Some("Max directory depth (default: 1)")),
             ], vec!["path"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_list_dir(&args).map_err(anyhow::Error::msg)?;
+                let r = tool_list_dir(&args).map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -271,7 +265,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("max_results", "integer", None),
             ], vec!["pattern", "path"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_grep_search(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_grep_search(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -285,7 +279,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("max_results", "integer", None),
             ], vec!["path"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_find_files(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_find_files(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -297,7 +291,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("limit", "integer", Some("Max number of results")),
             ], vec![]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_process_list(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_process_list(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -310,7 +304,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("signal", "string", Some("Signal (default: TERM)")),
             ], vec![]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_process_kill(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_process_kill(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -319,7 +313,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
             "Get system information: OS, CPU, memory, disk, uptime.",
             schema(vec![], vec![]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_sysinfo(&args).map_err(anyhow::Error::msg)?;
+                let r = tool_sysinfo(&args).map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -330,7 +324,7 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("path", "string", Some("Absolute path to the file to send")),
             ], vec!["path"]),
             |args: Value, ctx: ToolContext| async move {
-                let r = tool_chat_send_file(&args).await.map_err(anyhow::Error::msg)?;
+                let r = tool_chat_send_file(&args).await.map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -588,12 +582,7 @@ async fn tool_web_fetch(args: &Value) -> Result<String, String> {
     let url = args["url"].as_str().ok_or("Missing 'url'")?;
     let method = args["method"].as_str().unwrap_or("GET").to_uppercase();
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = &*SHARED_HTTP_CLIENT;
 
     let mut req = match method.as_str() {
         "POST" => client.post(url),
@@ -666,14 +655,9 @@ async fn tool_web_search(args: &Value) -> Result<String, String> {
     }
 
     // General search: DuckDuckGo → Bing → Baidu
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = &*SHARED_HTTP_CLIENT;
 
-    if let Ok(results) = search_duckduckgo(&client, query, num).await {
+    if let Ok(results) = search_duckduckgo(client, query, num).await {
         if !results.is_empty() { return Ok(results); }
     }
     if let Ok(results) = search_bing(&client, query, num).await {
@@ -688,13 +672,7 @@ async fn tool_web_search(args: &Value) -> Result<String, String> {
 
 // ---- Baidu Hot Search ----
 async fn fetch_baidu_hot() -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .user_agent("Mozilla/5.0")
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-
-    let resp = client
+    let resp = SHARED_HTTP_CLIENT
         .get("https://top.baidu.com/api/board?platform=wise&tab=realtime")
         .header("Accept", "application/json")
         .send().await.map_err(|e| format!("Baidu: {}", e))?;
@@ -1053,19 +1031,7 @@ fn extract_text_between(html: &str, open: char, close: char) -> String {
     String::new()
 }
 
-fn strip_html_tags(html: &str) -> String {
-    let mut result = String::new();
-    let mut in_tag = false;
-    for ch in html.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => result.push(ch),
-            _ => {}
-        }
-    }
-    result
-}
+
 
 fn percent_decode(input: &str) -> String {
     let mut result = Vec::new();
@@ -1087,65 +1053,6 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8(result).unwrap_or_else(|_| input.to_string())
 }
 
-// ============================================================================
-// Legacy Tauri Commands (kept for backward compatibility)
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebSearchResult {
-    pub title: String,
-    pub url: String,
-    pub snippet: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebFetchResult {
-    pub url: String,
-    pub title: Option<String>,
-    pub content: String,
-    pub content_type: Option<String>,
-    pub status: u16,
-    pub truncated: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BashExecResult {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
-    pub timed_out: bool,
-}
-
-#[tauri::command]
-pub async fn tool_web_search_cmd(_query: String, _count: Option<u32>, _api_key: Option<String>) -> Result<Vec<WebSearchResult>, String> {
-    Ok(vec![])
-}
-
-#[tauri::command]
-pub async fn tool_web_fetch_cmd(url: String, max_chars: Option<usize>) -> Result<WebFetchResult, String> {
-    let args = json!({"url": url, "max_chars": max_chars});
-    let result = tool_web_fetch(&args).await?;
-    Ok(WebFetchResult {
-        url,
-        title: None,
-        content: result,
-        content_type: None,
-        status: 200,
-        truncated: false,
-    })
-}
-
-#[tauri::command]
-pub async fn tool_bash_exec_cmd(command: String, timeout_secs: Option<u64>, cwd: Option<String>) -> Result<BashExecResult, String> {
-    let args = json!({"command": command, "timeout_secs": timeout_secs, "working_dir": cwd});
-    let result = tool_shell_exec(&args).await?;
-    Ok(BashExecResult {
-        stdout: result,
-        stderr: String::new(),
-        exit_code: 0,
-        timed_out: false,
-    })
-}
 
 #[tauri::command]
 pub async fn tool_image_describe(image_path: String, prompt: Option<String>) -> Result<String, String> {

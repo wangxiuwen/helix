@@ -394,9 +394,6 @@ pub fn run() {
             modules::evomap::evomap_status,
             modules::evomap::evomap_toggle,
             // Agent Tools
-            modules::agent_tools::tool_web_search_cmd,
-            modules::agent_tools::tool_web_fetch_cmd,
-            modules::agent_tools::tool_bash_exec_cmd,
             modules::agent_tools::tool_image_describe,
             // Subagents
             modules::subagents::spawn_subagent,

@@ -100,7 +100,9 @@ fn build_system_prompt(custom_prompt: &str) -> String {
          ### Process Management\n\
          - `process_list` — List running processes\n\
          - `process_kill` — Terminate processes\n\
-         - `sysinfo` — Get system hardware and software information"
+         - `sysinfo` — Get system hardware and software information\n\n\
+         ### Chat\n\
+         - `chat_send_file` — Send a file as a downloadable card in the chat"
             .to_string(),
     );
 
@@ -247,16 +249,17 @@ pub async fn agent_process_message(
     // 7. Save user message to DB
     let _ = database::save_conversation_message(account_id, "user", user_input);
 
-    // 8. Load conversation history and build state
-    let history = database::get_conversation_history(account_id, 50)?;
-    let mut context_msg = String::new();
-    for h in &history {
-        context_msg.push_str(&format!("[{}]: {}\n", h.role, h.content));
-    }
-    let full_input = if context_msg.is_empty() {
+    // 8. Load conversation history and build structured context
+    let history = database::get_conversation_history(account_id, 20)?;
+    let full_input = if history.len() <= 1 {
         user_input.to_string()
     } else {
-        format!("{}\n[user]: {}", context_msg, user_input)
+        let context: Vec<String> = history.iter()
+            .rev()
+            .take(history.len().saturating_sub(1))
+            .map(|h| format!("**{}**: {}", if h.role == "user" { "User" } else { "Assistant" }, h.content))
+            .collect();
+        format!("## Conversation History\n{}\n\n---\n**User**: {}", context.join("\n\n"), user_input)
     };
 
     AGENT_CANCELLED.store(false, Ordering::SeqCst);
