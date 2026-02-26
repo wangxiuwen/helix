@@ -558,7 +558,8 @@ pub async fn agent_chat(account_id: String, content: String, images: Option<Vec<
     } else {
         agent_process_message_with_images(&account_id, &content, &imgs).await?
     };
-    Ok(json!({ "content": reply }))
+    let files = super::tools::take_sent_files();
+    Ok(json!({ "content": reply, "files": files }))
 }
 
 /// Get conversation history

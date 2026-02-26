@@ -14,14 +14,23 @@ use std::process::Stdio;
 use std::sync::Mutex;
 use std::collections::HashSet;
 
-/// Tracks files already sent in the current agent session to prevent duplicates.
-static SENT_FILES: std::sync::LazyLock<Mutex<HashSet<String>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Tracks files sent in the current agent session (metadata for response).
+static SENT_FILES: std::sync::LazyLock<Mutex<Vec<Value>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// Call at the start of each agent call to reset sent-file tracking.
 pub fn clear_sent_files() {
-    if let Ok(mut set) = SENT_FILES.lock() {
-        set.clear();
+    if let Ok(mut v) = SENT_FILES.lock() {
+        v.clear();
+    }
+}
+
+/// Get and clear sent files metadata (called by agent_chat to include in response)
+pub fn take_sent_files() -> Vec<Value> {
+    if let Ok(mut v) = SENT_FILES.lock() {
+        std::mem::take(&mut *v)
+    } else {
+        Vec::new()
     }
 }
 
@@ -396,24 +405,24 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         _            => "application/octet-stream",
     };
 
-    // Deduplicate: if this exact path was already sent in this agent session, skip
-    if let Ok(mut set) = SENT_FILES.lock() {
-        if set.contains(&path) {
+    // Deduplicate by path within this agent session
+    if let Ok(files) = SENT_FILES.lock() {
+        if files.iter().any(|f| f["path"].as_str() == Some(&path)) {
             return Ok(format!("文件「{}」已经发送过了，无需重复发送。", display_name));
         }
-        set.insert(path.clone());
     }
 
-    // Emit only path + metadata to frontend — NO file data travels through IPC.
-    // Frontend opens native OS save dialog and copies directly from disk.
-    info!("[chat_send_file] Emitting file-attachment event: name={}, path={}", display_name, path);
-    crate::modules::infra::log_bridge::emit_custom_event("file-attachment", serde_json::json!({
+    // Store file metadata — will be included in agent_chat response
+    let file_meta = json!({
         "name": display_name,
         "path": path,
         "mime": mime,
         "size": size_str,
-    }));
-    info!("[chat_send_file] Event emitted successfully");
+    });
+    info!("[chat_send_file] Stored file metadata: name={}, path={}", display_name, path);
+    if let Ok(mut files) = SENT_FILES.lock() {
+        files.push(file_meta);
+    }
 
     Ok(format!("✅ 文件「{}」({})已发送到对话框，用户可以点击「另存为」下载。", display_name, size_str))
 }

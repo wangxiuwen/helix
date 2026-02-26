@@ -370,11 +370,21 @@ export const useDevOpsStore = create<helixState>()(
                         ),
                     }));
 
-                    const result = await invoke<{ content: string }>('agent_chat', {
+                    const result = await invoke<{ content: string; files?: Array<{ name: string; path: string; mime: string; size: string }> }>('agent_chat', {
                         accountId,
                         content,
                         images: images || [],
                     });
+
+                    // Push file attachments to window buffer (bypasses Tauri events)
+                    if (result.files && result.files.length > 0) {
+                        const w = window as any;
+                        if (!w.__helix_file_attachments) w.__helix_file_attachments = [];
+                        for (const f of result.files) {
+                            w.__helix_file_attachments.push({ id: Date.now() + Math.random(), ...f });
+                        }
+                        window.dispatchEvent(new Event('helix:update'));
+                    }
 
                     const assistantMsg: ChatMessage = {
                         id: generateId(), role: 'assistant',
