@@ -1,23 +1,14 @@
-//! Subagents — Concurrent AI Workers
+//! Subagents — Concurrent AI Workers powered by agents-sdk.
 //!
 //! Allows the main agent to spawn isolated, parallel AI tasks.
-//! Uses async-openai SDK for AI calls — same as the main agent loop.
 
-use async_openai::{
-    config::OpenAIConfig,
-    types::{
-        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
-        ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
-    },
-    Client,
-};
+use agents_sdk::{ConfigurableAgentBuilder, OpenAiConfig, OpenAiChatModel, persistence::InMemoryCheckpointer};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::json;
+use std::sync::Arc;
 use tracing::info;
 
 use crate::modules::config::load_app_config;
-use super::core::{get_tool_definitions, execute_tool};
 
 // ============================================================================
 // Types
@@ -39,7 +30,7 @@ pub struct SubagentResult {
 }
 
 // ============================================================================
-// Core Subagent Engine
+// Core Subagent Engine — powered by agents-sdk
 // ============================================================================
 
 pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, String> {
@@ -47,13 +38,13 @@ pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, Stri
 
     let config = load_app_config().map_err(|e| format!("config error: {}", e))?;
     let ai = config.ai_config;
-    let tool_defs = get_tool_definitions().await;
-    let max_rounds = params.max_rounds.unwrap_or(10);
 
-    let openai_config = OpenAIConfig::new()
-        .with_api_base(&ai.base_url)
-        .with_api_key(&ai.api_key);
-    let client = Client::with_config(openai_config);
+    let full_api_url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
+    let oai_config = OpenAiConfig::new(&ai.api_key, &ai.model)
+        .with_api_url(Some(full_api_url));
+    let model = Arc::new(
+        OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init: {}", e))?
+    );
 
     let base_prompt = params.system_prompt.unwrap_or_else(|| {
         "你是 Helix 的专属 Subagent (并发执行体)。\n\
@@ -70,99 +61,29 @@ pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, Stri
         base_prompt
     };
 
-    let mut messages: Vec<ChatCompletionRequestMessage> = vec![
-        ChatCompletionRequestSystemMessageArgs::default()
-            .content(system_prompt.clone())
-            .build()
-            .map_err(|e| e.to_string())?
-            .into(),
-        ChatCompletionRequestUserMessageArgs::default()
-            .content(params.task.clone())
-            .build()
-            .map_err(|e| e.to_string())?
-            .into(),
-    ];
+    let sdk_tools = super::tools::build_tools();
 
-    let mut rounds_used = 0u32;
-    let mut total_tokens = 0u32;
+    let agent = ConfigurableAgentBuilder::new("Helix Subagent")
+        .with_model(model)
+        .with_system_prompt(&system_prompt)
+        .with_tools(sdk_tools)
+        .with_checkpointer(Arc::new(InMemoryCheckpointer::new()))
+        .build()
+        .map_err(|e| format!("Agent build: {}", e))?;
 
-    while rounds_used < max_rounds {
-        rounds_used += 1;
-        info!("Subagent round {}/{}", rounds_used, max_rounds);
+    let state = Arc::new(agents_sdk::state::AgentStateSnapshot::default());
+    let response = agent.handle_message(&params.task, state).await
+        .map_err(|e| format!("Subagent error: {}", e))?;
 
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(&ai.model)
-            .messages(messages.clone())
-            .tools(tool_defs.clone())
-            .build()
-            .map_err(|e| format!("Build request: {}", e))?;
-
-        let response = client
-            .chat()
-            .create(request)
-            .await
-            .map_err(|e| format!("AI call failed: {}", e))?;
-
-        if let Some(usage) = &response.usage {
-            total_tokens += usage.total_tokens as u32;
-        }
-
-        let choice = response.choices.first().ok_or("No choices in response")?;
-
-        if let Some(ref tcs) = choice.message.tool_calls {
-            if tcs.is_empty() {
-                let final_text = choice.message.content.clone()
-                    .unwrap_or_else(|| "Subagent finished with no text response.".to_string());
-                return Ok(SubagentResult { output: final_text, rounds_used, tokens_used: total_tokens });
-            }
-
-            // Add assistant message with tool calls
-            let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
-                .tool_calls(tcs.clone())
-                .build()
-                .map_err(|e| e.to_string())?;
-            messages.push(assistant_msg.into());
-
-            // Execute tools concurrently
-            let mut futures = vec![];
-            for tc in tcs {
-                let name = tc.function.name.clone();
-                let args_str = tc.function.arguments.clone();
-                let call_id = tc.id.clone();
-
-                futures.push(async move {
-                    let args: Value = serde_json::from_str(&args_str).unwrap_or(serde_json::json!({}));
-                    let result = match execute_tool(&name, &args, None).await {
-                        Ok(res) => res,
-                        Err(e) => format!("Error executing {}: {}", name, e),
-                    };
-                    (call_id, result)
-                });
-            }
-
-            let tool_results = futures::future::join_all(futures).await;
-            for (call_id, result) in tool_results {
-                let tool_msg = ChatCompletionRequestToolMessageArgs::default()
-                    .content(result.clone())
-                    .tool_call_id(call_id.clone())
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                messages.push(tool_msg.into());
-            }
-
-            continue;
-        }
-
-        // No tool calls — final answer
-        let final_text = choice.message.content.clone()
-            .unwrap_or_else(|| "Subagent finished with no text response.".to_string());
-        return Ok(SubagentResult { output: final_text, rounds_used, tokens_used: total_tokens });
-    }
+    let output = match &response.content {
+        agents_sdk::messaging::MessageContent::Text(t) => t.clone(),
+        other => format!("{:?}", other),
+    };
 
     Ok(SubagentResult {
-        output: "Subagent terminated: reached maximum allowed tool rounds without concluding.".to_string(),
-        rounds_used,
-        tokens_used: total_tokens,
+        output,
+        rounds_used: 1,  // SDK handles rounds internally
+        tokens_used: 0,   // SDK doesn't expose token count yet
     })
 }
 

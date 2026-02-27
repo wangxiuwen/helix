@@ -297,6 +297,8 @@ pub fn run() {
             modules::database::db_set_auto_reply,
             // Agent commands
             modules::agent::agent_chat,
+            modules::agent::agent_cancel,
+            modules::agent::save_file_to,
             modules::agent::agent_get_history,
             modules::agent::agent_clear_history,
             // Cron commands
@@ -392,9 +394,6 @@ pub fn run() {
             modules::evomap::evomap_status,
             modules::evomap::evomap_toggle,
             // Agent Tools
-            modules::agent_tools::tool_web_search_cmd,
-            modules::agent_tools::tool_web_fetch_cmd,
-            modules::agent_tools::tool_bash_exec_cmd,
             modules::agent_tools::tool_image_describe,
             // Subagents
             modules::subagents::spawn_subagent,

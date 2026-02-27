@@ -1,36 +1,45 @@
-//! Helix Agent — Powered by async-openai SDK.
+//! Helix Agent — Powered by agents-sdk.
 //!
-//! Clean agent loop: system prompt → user message → AI call → tool execution → repeat.
+//! Uses ConfigurableAgentBuilder for the agent loop with custom tools.
 
-use async_openai::{
-    config::OpenAIConfig,
-    types::{
-        ChatCompletionRequestAssistantMessageArgs,
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-        ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
-        ChatCompletionRequestUserMessageContent,
-        ChatCompletionRequestMessageContentPartText,
-        ChatCompletionRequestMessageContentPartImage,
-        ImageUrl,
-        CreateChatCompletionRequestArgs,
-    },
-    Client,
+use agents_sdk::{
+    ConfigurableAgentBuilder, OpenAiConfig, OpenAiChatModel,
+    state::AgentStateSnapshot,
+    persistence::InMemoryCheckpointer,
 };
+
 use serde_json::{json, Value};
 use tracing::info;
-use tauri::Emitter;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
 use crate::modules::config::load_app_config;
 use crate::modules::database;
 
+/// Global cancellation flag — set to true to stop the running agent loop
+static AGENT_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Cancel the currently running agent
+#[tauri::command]
+pub fn agent_cancel() {
+    AGENT_CANCELLED.store(true, Ordering::SeqCst);
+    emit_agent_progress("cancelled", json!({}));
+    info!("[agent] Cancellation requested");
+}
+
+/// Copy a file from source to destination (used by file download card)
+#[tauri::command]
+pub async fn save_file_to(source: String, destination: String) -> Result<String, String> {
+    tokio::fs::copy(&source, &destination)
+        .await
+        .map_err(|e| format!("Copy failed: {}", e))?;
+    Ok(format!("Saved to {}", destination))
+}
+
 /// Emit agent progress event to frontend for real-time display
-fn emit_agent_progress(event_type: &str, data: Value) {
+pub fn emit_agent_progress(event_type: &str, data: Value) {
     let payload = json!({ "type": event_type, "data": data });
     crate::modules::infra::log_bridge::emit_custom_event("agent-progress", payload);
 }
-
-// Re-export tool functions from agent_tools module
-pub use super::tools::{execute_tool, get_tool_definitions};
 
 // ============================================================================
 // System Prompt Builder
@@ -91,7 +100,9 @@ fn build_system_prompt(custom_prompt: &str) -> String {
          ### Process Management\n\
          - `process_list` — List running processes\n\
          - `process_kill` — Terminate processes\n\
-         - `sysinfo` — Get system hardware and software information"
+         - `sysinfo` — Get system hardware and software information\n\n\
+         ### Chat\n\
+         - `chat_send_file` — Send a file as a downloadable card in the chat"
             .to_string(),
     );
 
@@ -120,10 +131,30 @@ fn build_system_prompt(custom_prompt: &str) -> String {
          - If a command fails, analyze the error and try to fix it\n\
          - Be concise but thorough\n\
          - If you detect the user's language (e.g. Chinese), respond in the same language\n\
+         - **CRITICAL: Use tools ONLY when the user explicitly asks you to perform an action** \
+           (search files, run commands, send files, etc.). For normal conversation, questions, \
+           or chitchat (e.g. '你好', '你几岁了', 'what is X'), respond directly in text \
+           WITHOUT calling any tools. Do NOT use tools proactively.\n\
          - **IMPORTANT: Do NOT create files on disk to deliver content to the user**. \
            Instead, return all generated content (code, text, documents, data) directly \
            in your chat response. Only write files when the user explicitly asks to \
-           save/create a file at a specific path."
+           save/create a file at a specific path.\n\
+         - **You are running in the Helix desktop app — NOT WeChat**. \
+           You have NO access to WeChat, WeChat File Transfer, or any WeChat API. \
+           Never mention WeChat.\n\
+         - **When the user asks you to send/share/give them an EXISTING file** (PDF, image, zip, etc.), \
+           you MUST use the `chat_send_file` tool with the file's absolute path. \
+           This will display a download card in the chat for the user to save it. \
+           Do NOT paste the file contents as text. Do NOT just show the file path. \
+           Always use `chat_send_file` for existing files.\n\
+         - **If multiple files match the same name**, do NOT send any file automatically. \
+           Instead, list all matches with numbered paths and ask the user which one they want.\n\
+         - **For weather, real-time data, or any online query**, use the `web_fetch` tool \
+           to call public APIs. Examples:\n\
+           - Weather: `web_fetch` with url `https://wttr.in/城市名?format=j1` (returns JSON)\n\
+           - Or `https://wttr.in/城市名?lang=zh` for readable weather in Chinese\n\
+           - Exchange rates, news, etc: use appropriate public APIs via `web_fetch`\n\
+           - You can make GET/POST requests with custom headers and body"
             .to_string(),
     );
 
@@ -172,7 +203,7 @@ fn is_handled_command(input: &str) -> bool {
 // Core Agent Loop
 // ============================================================================
 
-/// Process a message through the agent loop.
+/// Process a message through the agent loop (powered by agents-sdk).
 /// Returns the final assistant response after all tool calls are resolved.
 pub async fn agent_process_message(
     account_id: &str,
@@ -191,287 +222,100 @@ pub async fn agent_process_message(
         return Err("API Key 未设置，请在设置中配置".to_string());
     }
 
-    // 3. Build async-openai client with configurable base URL
-    let openai_config = OpenAIConfig::new()
-        .with_api_base(&ai.base_url)
-        .with_api_key(&ai.api_key);
-    let client = Client::with_config(openai_config);
+    // 3. Build agents-sdk model with configurable base URL
+    // SDK api_url is the FULL endpoint (e.g. .../v1/chat/completions), not just base
+    let full_api_url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
+    let oai_config = OpenAiConfig::new(&ai.api_key, &ai.model)
+        .with_api_url(Some(full_api_url));
+    let model = Arc::new(
+        OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init failed: {}", e))?
+    );
 
-    // 4. Build messages
+    // 4. Build system prompt
     let system_prompt = build_system_prompt(&ai.system_prompt);
-    let mut messages: Vec<ChatCompletionRequestMessage> = Vec::new();
 
-    messages.push(
-        ChatCompletionRequestSystemMessageArgs::default()
-            .content(system_prompt.clone())
-            .build()
-            .map_err(|e| e.to_string())?
-            .into(),
-    );
+    // 5. Build tools — direct agents-sdk tool definitions
+    let sdk_tools = super::tools::build_tools();
 
-    // Load conversation history
-    let history = database::get_conversation_history(account_id, 50)?;
-    for h in &history {
-        match h.role.as_str() {
-            "user" => {
-                messages.push(
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(h.content.clone())
-                        .build()
-                        .map_err(|e| e.to_string())?
-                        .into(),
-                );
-            }
-            "assistant" => {
-                messages.push(
-                    ChatCompletionRequestAssistantMessageArgs::default()
-                        .content(h.content.clone())
-                        .build()
-                        .map_err(|e| e.to_string())?
-                        .into(),
-                );
-            }
-            _ => {}
-        }
-    }
+    // 6. Build agent
+    let agent = ConfigurableAgentBuilder::new("Helix AI Assistant")
+        .with_model(model)
+        .with_system_prompt(&system_prompt)
+        .with_tools(sdk_tools)
+        .with_checkpointer(Arc::new(InMemoryCheckpointer::new()))
+        .build()
+        .map_err(|e| format!("Agent build failed: {}", e))?;
 
-    // Current user message
-    messages.push(
-        ChatCompletionRequestUserMessageArgs::default()
-            .content(user_input.to_string())
-            .build()
-            .map_err(|e| e.to_string())?
-            .into(),
-    );
+    // 7. Save user message to DB
     let _ = database::save_conversation_message(account_id, "user", user_input);
 
-    // 5. Build tool definitions
-    let tool_defs = get_tool_definitions().await;
+    // 8. Load conversation history and build structured context
+    let history = database::get_conversation_history(account_id, 20)?;
+    let full_input = if history.len() <= 1 {
+        user_input.to_string()
+    } else {
+        let context: Vec<String> = history.iter()
+            .rev()
+            .take(history.len().saturating_sub(1))
+            .map(|h| format!("**{}**: {}", if h.role == "user" { "User" } else { "Assistant" }, h.content))
+            .collect();
+        format!("## Conversation History\n{}\n\n---\n**User**: {}", context.join("\n\n"), user_input)
+    };
 
-    // 6. Agent loop
-    let max_iterations = 10;
-    for iteration in 0..max_iterations {
-        info!("[agent] Iteration {}, msgs={}", iteration, messages.len());
-        emit_agent_progress("thinking", json!({ "iteration": iteration, "model": &ai.model }));
+    AGENT_CANCELLED.store(false, Ordering::SeqCst);
+    super::tools::clear_sent_files();
+    emit_agent_progress("thinking", json!({ "iteration": 0, "model": &ai.model }));
 
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(&ai.model)
-            .messages(messages.clone())
-            .tools(tool_defs.clone())
-            .build()
-            .map_err(|e| format!("Build request failed: {}", e))?;
+    // 9. Run the agent
+    let state = Arc::new(AgentStateSnapshot::default());
+    let response = agent.handle_message(&full_input, state).await
+        .map_err(|e| format!("Agent error: {}", e))?;
 
-        let response = client
-            .chat()
-            .create(request)
-            .await
-            .map_err(|e| format!("AI call failed: {}", e))?;
-
-        let choice = response
-            .choices
-            .first()
-            .ok_or("No choices in AI response")?;
-
-        // Check for tool calls
-        let tool_calls = &choice.message.tool_calls;
-
-        if let Some(ref tcs) = tool_calls {
-            if tcs.is_empty() {
-                // No tool calls — return text
-                let content = choice
-                    .message
-                    .content
-                    .clone()
-                    .unwrap_or_default();
-                let clean = clean_response(&content);
-                let _ = database::save_conversation_message(account_id, "assistant", &clean);
-                emit_agent_progress("done", json!({ "chars": clean.len() }));
-                return Ok(clean);
-            }
-
-            // Add assistant message with tool calls to history
-            let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
-                .tool_calls(tcs.clone())
-                .build()
-                .map_err(|e| e.to_string())?;
-            messages.push(assistant_msg.into());
-
-            // Execute each tool call
-            for tc in tcs {
-                let tool_name = &tc.function.name;
-                info!("[agent] Tool call: {} (id={})", tool_name, tc.id);
-                emit_agent_progress("tool_call", json!({ "name": tool_name, "args": &tc.function.arguments }));
-
-                let args: Value = serde_json::from_str(&tc.function.arguments)
-                    .unwrap_or(json!({}));
-
-                let result = match execute_tool(tool_name, &args, Some(account_id)).await {
-                    Ok(r) => r,
-                    Err(e) => format!("Error: {}", e),
-                };
-
-                info!("[agent] Tool result: {} chars", result.len());
-                emit_agent_progress("tool_result", json!({ "name": tool_name, "chars": result.len(), "preview": &result[..result.len().min(200)] }));
-
-                // Add tool result message
-                let tool_msg = ChatCompletionRequestToolMessageArgs::default()
-                    .content(result.clone())
-                    .tool_call_id(tc.id.clone())
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                messages.push(tool_msg.into());
-            }
-
-            // Continue loop
-        } else {
-            // No tool calls — final text response
-            let content = choice.message.content.clone().unwrap_or_default();
-            let clean = clean_response(&content);
-            let _ = database::save_conversation_message(account_id, "assistant", &clean);
-            return Ok(clean);
-        }
-    }
-
-    Err("Agent loop exceeded maximum iterations".to_string())
+    // Extract text from AgentMessage.content
+    let text = match &response.content {
+        agents_sdk::messaging::MessageContent::Text(t) => t.clone(),
+        other => format!("{:?}", other),
+    };
+    let clean = clean_response(&text);
+    let _ = database::save_conversation_message(account_id, "assistant", &clean);
+    emit_agent_progress("done", json!({ "chars": clean.len() }));
+    Ok(clean)
 }
 
-/// Process a message with images through the agent loop (multi-modal).
+
+/// Process a message with images — describes images first, then delegates to main agent.
 pub async fn agent_process_message_with_images(
     account_id: &str,
     user_input: &str,
     images: &[String],
 ) -> Result<String, String> {
-    // Check for handled commands first
-    if let Some(response) = dispatch_commands(user_input, account_id) {
-        return Ok(response);
-    }
-
-    let config = load_app_config().map_err(|e| format!("配置加载失败: {}", e))?;
-    let ai = &config.ai_config;
-    if ai.api_key.is_empty() {
-        return Err("API Key 未设置".to_string());
-    }
-
-    let openai_config = OpenAIConfig::new()
-        .with_api_base(&ai.base_url)
-        .with_api_key(&ai.api_key);
-    let client = Client::with_config(openai_config);
-
-    let system_prompt = build_system_prompt(&ai.system_prompt);
-    let mut messages: Vec<ChatCompletionRequestMessage> = Vec::new();
-
-    messages.push(
-        ChatCompletionRequestSystemMessageArgs::default()
-            .content(system_prompt)
-            .build()
-            .map_err(|e| e.to_string())?
-            .into(),
-    );
-
-    // Load conversation history (text only)
-    let history = database::get_conversation_history(account_id, 50)?;
-    for h in &history {
-        match h.role.as_str() {
-            "user" => {
-                messages.push(
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(h.content.clone())
-                        .build()
-                        .map_err(|e| e.to_string())?
-                        .into(),
-                );
-            }
-            "assistant" => {
-                messages.push(
-                    ChatCompletionRequestAssistantMessageArgs::default()
-                        .content(h.content.clone())
-                        .build()
-                        .map_err(|e| e.to_string())?
-                        .into(),
-                );
-            }
-            _ => {}
-        }
-    }
-
-    // Build multi-modal user message: text + images
-    use async_openai::types::ChatCompletionRequestUserMessageContentPart;
-    let mut parts: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
-    parts.push(ChatCompletionRequestUserMessageContentPart::Text(
-        ChatCompletionRequestMessageContentPartText { text: user_input.to_string() },
-    ));
+    // Describe each image using raw HTTP (tool_image_describe in tools.rs)
+    let mut descriptions = Vec::new();
     for img_url in images {
-        parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
-            ChatCompletionRequestMessageContentPartImage {
-                image_url: ImageUrl { url: img_url.clone(), detail: None },
-            },
-        ));
+        let desc = super::tools::tool_image_describe(
+            img_url.clone(),
+            Some(format!("请描述这张图片的内容，用户的问题是: {}", user_input)),
+        ).await.unwrap_or_else(|e| format!("[图片无法识别: {}]", e));
+        descriptions.push(desc);
     }
 
-    let user_msg = ChatCompletionRequestUserMessageArgs::default()
-        .content(ChatCompletionRequestUserMessageContent::Array(parts))
-        .build()
-        .map_err(|e| e.to_string())?;
-    messages.push(user_msg.into());
-    let _ = database::save_conversation_message(account_id, "user", user_input);
+    // Combine user text with image descriptions
+    let combined = if descriptions.is_empty() {
+        user_input.to_string()
+    } else {
+        format!(
+            "{}\n\n[附带 {} 张图片的描述]:\n{}",
+            user_input,
+            descriptions.len(),
+            descriptions.iter().enumerate()
+                .map(|(i, d)| format!("图片{}: {}", i + 1, d))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
 
-    info!("[agent] Multi-modal message with {} images", images.len());
-
-    // Agent loop (same as agent_process_message)
-    let tool_defs = get_tool_definitions().await;
-    let max_iterations = 10;
-    for iteration in 0..max_iterations {
-        info!("[agent] Iteration {}, msgs={}", iteration, messages.len());
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(&ai.model)
-            .messages(messages.clone())
-            .tools(tool_defs.clone())
-            .build()
-            .map_err(|e| format!("Build request failed: {}", e))?;
-
-        let response = client.chat().create(request).await
-            .map_err(|e| format!("AI call failed: {}", e))?;
-
-        let choice = response.choices.first().ok_or("No choices")?;
-        let tool_calls = &choice.message.tool_calls;
-
-        if let Some(ref tcs) = tool_calls {
-            if tcs.is_empty() {
-                let content = choice.message.content.clone().unwrap_or_default();
-                let clean = clean_response(&content);
-                let _ = database::save_conversation_message(account_id, "assistant", &clean);
-                return Ok(clean);
-            }
-            let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
-                .tool_calls(tcs.clone())
-                .build()
-                .map_err(|e| e.to_string())?;
-            messages.push(assistant_msg.into());
-
-            for tc in tcs {
-                let tool_name = &tc.function.name;
-                info!("[agent] Tool call: {} (id={})", tool_name, tc.id);
-                let args: Value = serde_json::from_str(&tc.function.arguments).unwrap_or(json!({}));
-                let result = match execute_tool(tool_name, &args, Some(account_id)).await {
-                    Ok(r) => r,
-                    Err(e) => format!("Error: {}", e),
-                };
-                let tool_msg = ChatCompletionRequestToolMessageArgs::default()
-                    .content(result)
-                    .tool_call_id(tc.id.clone())
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                messages.push(tool_msg.into());
-            }
-        } else {
-            let content = choice.message.content.clone().unwrap_or_default();
-            let clean = clean_response(&content);
-            let _ = database::save_conversation_message(account_id, "assistant", &clean);
-            return Ok(clean);
-        }
-    }
-
-    Err("Agent loop exceeded maximum iterations".to_string())
+    // Delegate to main agent
+    agent_process_message(account_id, &combined).await
 }
 
 /// Strip thinking tags and clean up response text.
@@ -492,7 +336,8 @@ pub async fn agent_chat(account_id: String, content: String, images: Option<Vec<
     } else {
         agent_process_message_with_images(&account_id, &content, &imgs).await?
     };
-    Ok(json!({ "content": reply }))
+    let files = super::tools::take_sent_files();
+    Ok(json!({ "content": reply, "files": files }))
 }
 
 /// Get conversation history

@@ -57,6 +57,7 @@ export interface ChatMessage {
     timestamp: string;
     model?: string;
     images?: string[];  // base64 data URLs for image messages
+    files?: Array<{ name: string; path: string; mime: string; size: string }>;
     toolCalls?: Array<{ name: string; args: Record<string, any>; result?: string; status?: 'pending' | 'done' | 'error' }>;
     pendingConfirm?: { toolName: string; args: Record<string, any>; description: string };
 }
@@ -371,7 +372,7 @@ export const useDevOpsStore = create<helixState>()(
                         ),
                     }));
 
-                    const result = await invoke<{ content: string }>('agent_chat', {
+                    const result = await invoke<{ content: string; files?: Array<{ name: string; path: string; mime: string; size: string }> }>('agent_chat', {
                         accountId,
                         content,
                         images: images || [],
@@ -381,6 +382,7 @@ export const useDevOpsStore = create<helixState>()(
                         id: generateId(), role: 'assistant',
                         content: result.content || '(无响应)',
                         timestamp: new Date().toISOString(),
+                        ...(result.files && result.files.length > 0 ? { files: result.files } : {}),
                     };
                     set((s) => ({
                         chatSessions: s.chatSessions.map((cs) =>

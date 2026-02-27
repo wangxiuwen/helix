@@ -11,7 +11,20 @@ use tokio::io::AsyncWriteExt;
 use tracing::{error, info, warn};
 
 use crate::modules::config::get_data_dir;
-use super::tools::ToolDefinition;
+
+/// Plugin tool definition — local copy for manifest parsing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub r#type: String,
+    pub function: ToolFunctionDef,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolFunctionDef {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {

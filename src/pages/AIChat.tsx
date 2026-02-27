@@ -16,6 +16,7 @@ import {
     Smile,
     Sparkles,
     Trash2,
+    Square,
     User,
     Wrench,
     X,
@@ -41,6 +42,36 @@ async function fetchModelsFromProvider(provider: AIProvider): Promise<string[]> 
 
 const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 380;
+
+// Window-level event buffer for agent progress (survives unmount, HMR, StrictMode)
+declare global {
+    interface Window {
+        __helix_agent_status: string[];
+        __helix_listeners_registered?: boolean;
+    }
+}
+if (!window.__helix_agent_status) window.__helix_agent_status = [];
+
+if (!window.__helix_listeners_registered) {
+    window.__helix_listeners_registered = true;
+    import('@tauri-apps/api/event').then(({ listen }) => {
+        listen('agent-progress', (event: any) => {
+            const { type, data } = event.payload;
+            if (type === 'thinking') {
+                const msg = `🤔 思考中... (模型: ${data.model})`;
+                const arr = window.__helix_agent_status;
+                if (arr[arr.length - 1] !== msg) arr.push(msg);
+            } else if (type === 'tool_call') {
+                window.__helix_agent_status.push(`🔧 调用工具: ${data.name}`);
+            } else if (type === 'tool_result') {
+                window.__helix_agent_status.push(`✅ ${data.name} 完成 (${data.chars} 字符)`);
+            } else if (type === 'done' || type === 'cancelled') {
+                window.__helix_agent_status = [];
+            }
+            window.dispatchEvent(new Event('helix:update'));
+        });
+    });
+}
 
 function AIChat() {
     const { t } = useTranslation();
@@ -86,31 +117,27 @@ function AIChat() {
         ? [currentModel, ...fetchedModels]
         : fetchedModels.length > 0 ? fetchedModels : (currentModel ? [currentModel] : []);
 
-    // Agent progress tracking
-    const [agentStatus, setAgentStatus] = useState<string[]>([]);
+    // Agent progress — sync from window-level buffer
+    const [agentStatus, setAgentStatus] = useState<string[]>(() => [...window.__helix_agent_status]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [activeSession?.messages, agentStatus]);
 
-    // Listen for agent-progress events from Rust backend
+    // Clear agent status when switching conversations
     useEffect(() => {
-        let unlisten: (() => void) | null = null;
-        import('@tauri-apps/api/event').then(({ listen }) => {
-            listen<{ type: string; data: any }>('agent-progress', (event) => {
-                const { type, data } = event.payload;
-                if (type === 'thinking') {
-                    setAgentStatus(prev => [...prev, `🤔 思考中... (模型: ${data.model})`]);
-                } else if (type === 'tool_call') {
-                    setAgentStatus(prev => [...prev, `🔧 调用工具: ${data.name}`]);
-                } else if (type === 'tool_result') {
-                    setAgentStatus(prev => [...prev, `✅ ${data.name} 完成 (${data.chars} 字符)`]);
-                } else if (type === 'done') {
-                    setAgentStatus([]);
-                }
-            }).then(fn => { unlisten = fn; });
-        });
-        return () => { unlisten?.(); };
+        window.__helix_agent_status = [];
+        setAgentStatus([]);
+    }, [activeChatId]);
+
+    // Sync agent status from window buffer on mount and on every update event
+    useEffect(() => {
+        const sync = () => {
+            setAgentStatus([...window.__helix_agent_status]);
+        };
+        sync();
+        window.addEventListener('helix:update', sync);
+        return () => window.removeEventListener('helix:update', sync);
     }, []);
 
     // Auto-fetch models from API when provider changes
@@ -353,7 +380,41 @@ function AIChat() {
                                                         ))}
                                                     </div>
                                                 )}
-                                                {msg.content !== '(图片)' && <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{msg.content}</ReactMarkdown>}
+                                                {msg.content !== '(图片)' && (() => {
+                                                    // Parse __FILE_ATTACHMENT__ markers out of message content
+                                                    const parts = msg.content.split(/(__FILE_ATTACHMENT__\{.*?\}(?=__|$))/s);
+                                                    return parts.map((part, i) => {
+                                                        if (part.startsWith('__FILE_ATTACHMENT__')) {
+                                                            try {
+                                                                const jsonStr = part.slice('__FILE_ATTACHMENT__'.length);
+                                                                const att = JSON.parse(jsonStr);
+                                                                return (
+                                                                    <div key={i} className="not-prose my-2 flex items-center gap-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                                                                        <div className="text-2xl shrink-0">
+                                                                            {att.mime?.startsWith('image/') ? '🖼️' : att.mime === 'application/pdf' ? '📄' : att.mime?.includes('zip') ? '📦' : '📁'}
+                                                                        </div>
+                                                                        <div className="flex-1 min-w-0">
+                                                                            <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{att.name}</div>
+                                                                            <div className="text-xs text-gray-500">{att.size}</div>
+                                                                        </div>
+                                                                        <button
+                                                                            className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium"
+                                                                            onClick={() => {
+                                                                                const a = document.createElement('a');
+                                                                                a.href = `data:${att.mime};base64,${att.data}`;
+                                                                                a.download = att.name;
+                                                                                a.click();
+                                                                            }}
+                                                                        >
+                                                                            ⬇ 下载
+                                                                        </button>
+                                                                    </div>
+                                                                );
+                                                            } catch { return null; }
+                                                        }
+                                                        return part.trim() ? <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{part}</ReactMarkdown> : null;
+                                                    });
+                                                })()}
                                             </div>
                                             {msg.toolCalls && msg.toolCalls.length > 0 && (
                                                 <div className="mt-2 space-y-1">
@@ -382,6 +443,37 @@ function AIChat() {
                                                     </button>
                                                 </div>
                                             )}
+                                            {msg.files && msg.files.length > 0 && (
+                                                <div className="mt-2 space-y-2">
+                                                    {msg.files.map((f, i) => (
+                                                        <div key={i} className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                                                            <div className="text-2xl shrink-0">
+                                                                {f.mime?.startsWith('image/') ? '🖼️' : f.mime === 'application/pdf' ? '📄' : f.mime?.includes('zip') ? '📦' : '📁'}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{f.name}</div>
+                                                                <div className="text-xs text-gray-500">{f.size}</div>
+                                                            </div>
+                                                            <button
+                                                                className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium flex items-center gap-1"
+                                                                onClick={async () => {
+                                                                    try {
+                                                                        const { save } = await import('@tauri-apps/plugin-dialog');
+                                                                        const dest = await save({ defaultPath: f.name });
+                                                                        if (dest) {
+                                                                            const { invoke } = await import('@tauri-apps/api/core');
+                                                                            await invoke('save_file_to', { source: f.path, destination: dest });
+                                                                        }
+                                                                    } catch (e) { console.error('Save failed:', e); }
+                                                                }}
+                                                            >
+                                                                ⬇ 另存为
+                                                            </button>
+
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -393,12 +485,17 @@ function AIChat() {
                                     </div>
                                     <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[65%]">
                                         {agentStatus.length > 0 ? (
-                                            <div className="space-y-1 text-xs text-gray-500 dark:text-gray-400 font-mono">
-                                                {agentStatus.map((s, i) => (
-                                                    <div key={i} className="animate-in fade-in">{s}</div>
-                                                ))}
-                                                <span className="loading loading-dots loading-xs text-gray-400 ml-1" />
-                                            </div>
+                                            <details ref={el => { if (el && !el.hasAttribute('data-init')) { el.setAttribute('data-init', '1'); el.open = true; } }} className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                                                <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300">
+                                                    {agentStatus[agentStatus.length - 1]}
+                                                    <span className="loading loading-dots loading-xs text-gray-400 ml-1" />
+                                                </summary>
+                                                <div className="mt-1 space-y-0.5 pl-3 border-l-2 border-gray-200 dark:border-gray-600">
+                                                    {agentStatus.slice(0, -1).map((s, i) => (
+                                                        <div key={i} className="opacity-60">{s}</div>
+                                                    ))}
+                                                </div>
+                                            </details>
                                         ) : (
                                             <span className="loading loading-dots loading-sm text-gray-400" />
                                         )}
@@ -537,14 +634,24 @@ function AIChat() {
 
                                 <div className="flex-1" />
 
-                                {/* Send */}
-                                <button
-                                    className="px-4 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] disabled:opacity-40 text-white rounded-full transition-colors"
-                                    onClick={handleSend}
-                                    disabled={!input.trim() || loading.chat}
-                                >
-                                    {t('chat.send', '发送')}
-                                </button>
+                                {/* Send / Stop */}
+                                {loading.chat ? (
+                                    <button
+                                        className="px-4 py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors flex items-center gap-1.5"
+                                        onClick={() => invoke('agent_cancel')}
+                                    >
+                                        <Square size={11} fill="white" />
+                                        {t('chat.stop', '停止')}
+                                    </button>
+                                ) : (
+                                    <button
+                                        className="px-4 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] disabled:opacity-40 text-white rounded-full transition-colors"
+                                        onClick={handleSend}
+                                        disabled={!input.trim() && pendingImages.length === 0}
+                                    >
+                                        {t('chat.send', '发送')}
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </>

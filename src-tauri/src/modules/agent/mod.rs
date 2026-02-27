@@ -10,3 +10,4 @@ pub mod plugins;
 
 // Re-export core's public items so modules::agent::agent_chat still works
 pub use core::*;
+pub use tools::execute_tool;
