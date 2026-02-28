@@ -66,6 +66,7 @@ export interface ChatSession {
     id: string;
     title: string;
     messages: ChatMessage[];
+    workspace?: string;  // working directory for this session
     model?: string;
     provider?: string;
     createdAt: string;
@@ -181,7 +182,7 @@ interface helixState {
     updateAIProvider: (id: string, updates: Partial<AIProvider>) => void;
 
     // Chat
-    createChatSession: (title?: string) => string;
+    createChatSession: (title?: string, workspace?: string) => string;
     deleteChatSession: (id: string) => void;
     setActiveChatId: (id: string | null) => void;
     sendMessage: (sessionId: string, content: string, images?: string[]) => Promise<void>;
@@ -310,11 +311,12 @@ export const useDevOpsStore = create<helixState>()(
                 }),
 
             // ===== Chat with Function Calling =====
-            createChatSession: (title) => {
+            createChatSession: (title, workspace) => {
                 const id = generateId();
+                const autoWorkspace = workspace || `~/.helix/sandbox/${id}`;
                 const session: ChatSession = {
                     id, title: title || `新对话 ${new Date().toLocaleString()}`,
-                    messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+                    messages: [], workspace: autoWorkspace, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
                 };
                 set((s) => ({ chatSessions: [session, ...s.chatSessions], activeChatId: id }));
                 return id;
@@ -340,7 +342,7 @@ export const useDevOpsStore = create<helixState>()(
                             updatedAt: new Date().toISOString(),
                         } : cs
                     ),
-                    loading: { ...s.loading, chat: true },
+                    loading: { ...s.loading, [`chat-${sessionId}`]: true },
                 }));
 
                 try {
@@ -375,6 +377,7 @@ export const useDevOpsStore = create<helixState>()(
                         accountId,
                         content,
                         images: images || [],
+                        workspace: session?.workspace || null,
                     });
 
                     const assistantMsg: ChatMessage = {
@@ -403,7 +406,7 @@ export const useDevOpsStore = create<helixState>()(
                         ),
                     }));
                 } finally {
-                    set((s) => ({ loading: { ...s.loading, chat: false } }));
+                    set((s) => ({ loading: { ...s.loading, [`chat-${sessionId}`]: false } }));
                 }
             },
 

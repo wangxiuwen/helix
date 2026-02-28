@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 mod models;
 mod modules;
 mod commands;
@@ -158,10 +159,9 @@ pub fn run() {
                 error!("Failed to initialize cron tables: {}", e);
             }
 
-            // Initialize skills tables
-            if let Err(e) = modules::skills::init_skills_tables() {
-                error!("Failed to initialize skills tables: {}", e);
-            }
+            // Start skills hot-reload watcher (scans ~/.helix/skills/ every 5s)
+            modules::skills::start_skills_watcher();
+
 
             // Initialize hooks tables
             if let Err(e) = modules::hooks::init_hooks_tables() {
@@ -218,6 +218,9 @@ pub fn run() {
 
             // Start cron job scheduler
             modules::cron::start_cron_scheduler();
+
+            // Start heartbeat system (reads ~/.helix/HEARTBEAT.md periodically)
+            modules::cron::start_heartbeat();
 
             // Start embedded HTTP API server with Swagger UI
             modules::api_server::start_api_server(9520);

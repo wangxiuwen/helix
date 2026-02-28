@@ -43,10 +43,11 @@ __pycache__/
 *.pyc
 
 # Reference projects (for development only)
-
+copaw-ref/
 DOCKER_DEPLOYMENT.md
 pnpm-lock.yaml
 
 # Feishu SDK temp files
 larksuiteoapi-*.tgz
 package/
+Agent-Reach

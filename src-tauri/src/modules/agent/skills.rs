@@ -3,106 +3,12 @@
 //! Skills are stored in `~/.helix/skills/<name>/SKILL.md`.
 //! Each SKILL.md has YAML frontmatter (name, description, version, author, tags, icon)
 //! and a Markdown body that is injected into the agent system prompt.
+//! Enabled/disabled is controlled by an `enabled` field in frontmatter (default: true).
+//! No database storage — skills are discovered by scanning the directory each time.
 
-use once_cell::sync::Lazy;
-use parking_lot::Mutex;
-use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
-
-use crate::modules::config::get_data_dir;
-
-// ============================================================================
-// Constants — Built-in skill templates
-// ============================================================================
-
-/// Built-in skills that are auto-copied to ~/.helix/skills/ on first run.
-const BUILTIN_SKILLS: &[(&str, &str)] = &[
-    ("web-search", r#"---
-name: web-search
-description: 网络搜索和信息检索技能
-version: "1.0.0"
-author: helix
-tags: [search, web, research]
-icon: "🔍"
----
-
-# 网络搜索
-
-帮助用户搜索和检索网络上的信息。
-
-## 核心能力
-
-- 搜索引擎查询和结果整理
-- 网页内容提取和摘要
-- 多源信息对比和验证
-- 实时资讯获取
-"#),
-
-    ("code-assistant", r#"---
-name: code-assistant
-description: 代码辅助和编程技能
-version: "1.0.0"
-author: helix
-tags: [code, programming, debug]
-icon: "💻"
----
-
-# 编程助手
-
-帮助用户编写、调试和优化代码。
-
-## 核心能力
-
-- 代码编写和重构建议
-- Bug 排查和修复
-- 代码解释和文档生成
-- 最佳实践和设计模式指导
-"#),
-
-    ("task-automation", r#"---
-name: task-automation
-description: 任务自动化和流程编排技能
-version: "1.0.0"
-author: helix
-tags: [automation, workflow, task]
-icon: "⚡"
----
-
-# 任务自动化
-
-帮助用户创建和管理自动化工作流。
-
-## 核心能力
-
-- 定时任务配置和管理
-- 工作流编排和触发
-- 脚本编写和调试
-- 通知和告警设置
-"#),
-
-    ("data-analysis", r#"---
-name: data-analysis
-description: 数据分析和可视化技能
-version: "1.0.0"
-author: helix
-tags: [data, analysis, visualization]
-icon: "📊"
----
-
-# 数据分析
-
-帮助用户分析和可视化数据。
-
-## 核心能力
-
-- 数据清洗和转换
-- 统计分析和趋势识别
-- 数据可视化建议
-- 报告生成和摘要
-"#),
-];
 
 // ============================================================================
 // Types
@@ -123,29 +29,24 @@ pub struct SkillFrontmatter {
     pub icon: Option<String>,
     #[serde(default)]
     pub homepage: Option<String>,
+    /// Whether this skill is enabled (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
+
+fn default_true() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
-    /// Unique name (from frontmatter or directory name)
     pub name: String,
-    /// Description
     pub description: String,
-    /// Emoji icon
     pub icon: String,
-    /// Version string
     pub version: String,
-    /// Author name
     pub author: String,
-    /// Tags
     pub tags: Vec<String>,
-    /// Path to the SKILL.md file
     pub path: String,
-    /// Whether this skill is enabled
     pub enabled: bool,
-    /// The Markdown body (instructions)
     pub body: String,
-    /// Homepage URL
     #[serde(default)]
     pub homepage: String,
 }
@@ -157,92 +58,15 @@ pub struct Skill {
 /// Get the skills directory: ~/.helix/skills/
 fn get_skills_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-    let skills_dir = home.join(".helix").join("skills");
-    Ok(skills_dir)
+    Ok(home.join(".helix").join("skills"))
 }
 
-/// Ensure the skills directory exists and has built-in skills.
-pub fn ensure_skills_dir() -> Result<PathBuf, String> {
+/// Ensure the skills directory exists.
+fn ensure_skills_dir() -> Result<PathBuf, String> {
     let skills_dir = get_skills_dir()?;
     std::fs::create_dir_all(&skills_dir)
         .map_err(|e| format!("Failed to create skills dir: {}", e))?;
-
-    // Auto-copy built-in skills if they don't exist
-    for (name, content) in BUILTIN_SKILLS {
-        let skill_dir = skills_dir.join(name);
-        let skill_file = skill_dir.join("SKILL.md");
-        if !skill_file.exists() {
-            std::fs::create_dir_all(&skill_dir)
-                .map_err(|e| format!("Failed to create skill dir '{}': {}", name, e))?;
-            std::fs::write(&skill_file, content)
-                .map_err(|e| format!("Failed to write skill '{}': {}", name, e))?;
-            info!("Created built-in skill: {}", name);
-        }
-    }
-
     Ok(skills_dir)
-}
-
-// ============================================================================
-// Database (skill states — enabled/disabled)
-// ============================================================================
-
-static SKILLS_DB: Lazy<Mutex<Connection>> = Lazy::new(|| {
-    let conn = open_skills_db().expect("Failed to open skills database");
-    Mutex::new(conn)
-});
-
-fn open_skills_db() -> Result<Connection, String> {
-    let data_dir = get_data_dir()?;
-    std::fs::create_dir_all(&data_dir).map_err(|e| format!("Failed to create data dir: {}", e))?;
-    let db_path = data_dir.join("helix.db");
-    let conn =
-        Connection::open(&db_path).map_err(|e| format!("Failed to open skills DB: {}", e))?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-        .map_err(|e| format!("Failed to set pragmas: {}", e))?;
-    Ok(conn)
-}
-
-pub fn init_skills_tables() -> Result<(), String> {
-    let conn = SKILLS_DB.lock();
-    conn.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS skill_states (
-            name    TEXT PRIMARY KEY,
-            enabled INTEGER NOT NULL DEFAULT 1
-        );
-        ",
-    )
-    .map_err(|e| format!("Failed to create skill_states table: {}", e))?;
-    info!("Skills tables initialized");
-
-    // Ensure skills directory with built-ins
-    drop(conn); // release lock before filesystem ops
-    let _ = ensure_skills_dir();
-
-    Ok(())
-}
-
-fn get_skill_enabled(name: &str) -> bool {
-    let conn = SKILLS_DB.lock();
-    conn.query_row(
-        "SELECT enabled FROM skill_states WHERE name = ?1",
-        params![name],
-        |row| row.get::<_, i32>(0),
-    )
-    .map(|e| e != 0)
-    .unwrap_or(true) // default enabled
-}
-
-fn set_skill_enabled(name: &str, enabled: bool) -> Result<(), String> {
-    let conn = SKILLS_DB.lock();
-    conn.execute(
-        "INSERT INTO skill_states (name, enabled) VALUES (?1, ?2)
-         ON CONFLICT(name) DO UPDATE SET enabled = ?2",
-        params![name, enabled as i32],
-    )
-    .map_err(|e| format!("Failed to set skill state: {}", e))?;
-    Ok(())
 }
 
 // ============================================================================
@@ -252,18 +76,14 @@ fn set_skill_enabled(name: &str, enabled: bool) -> Result<(), String> {
 /// Parse a SKILL.md file into frontmatter + body.
 fn parse_skill_md(content: &str) -> Option<(SkillFrontmatter, String)> {
     let content = content.trim();
-
     if !content.starts_with("---") {
         return None;
     }
-
     let rest = &content[3..];
     let end_pos = rest.find("\n---")?;
     let yaml_str = &rest[..end_pos].trim();
     let body = rest[end_pos + 4..].trim().to_string();
-
     let frontmatter: SkillFrontmatter = serde_yaml::from_str(yaml_str).ok()?;
-
     Some((frontmatter, body))
 }
 
@@ -286,7 +106,6 @@ fn scan_skills() -> Vec<Skill> {
     }
 
     let mut skills = Vec::new();
-
     let entries = match std::fs::read_dir(&skills_dir) {
         Ok(e) => e,
         Err(e) => {
@@ -297,10 +116,7 @@ fn scan_skills() -> Vec<Skill> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
+        if !path.is_dir() { continue; }
         let skill_file = path.join("SKILL.md");
         if skill_file.exists() {
             if let Some(skill) = load_skill_file(&skill_file) {
@@ -318,18 +134,15 @@ fn load_skill_file(path: &Path) -> Option<Skill> {
     let content = std::fs::read_to_string(path).ok()?;
     let (fm, body) = parse_skill_md(&content)?;
 
-    let name = fm.name.clone();
-    let enabled = get_skill_enabled(&name);
-
     Some(Skill {
-        name,
+        name: fm.name.clone(),
         description: fm.description.unwrap_or_default(),
         icon: fm.icon.unwrap_or_else(|| "📦".to_string()),
         version: fm.version.unwrap_or_else(|| "0.1.0".to_string()),
         author: fm.author.unwrap_or_else(|| "unknown".to_string()),
         tags: fm.tags.unwrap_or_default(),
         path: path.to_string_lossy().to_string(),
-        enabled,
+        enabled: fm.enabled,
         body,
         homepage: fm.homepage.unwrap_or_default(),
     })
@@ -354,20 +167,39 @@ pub fn get_enabled_skills_prompt() -> String {
     }
 
     let mut prompt = String::from("\n\n## Active Skills\n\nThe following skills are available:\n\n");
-
     for skill in &enabled {
         prompt.push_str(&format!(
             "### {} {}\n\n{}\n\n---\n\n",
             skill.icon, skill.name, skill.body
         ));
     }
-
     prompt
 }
 
-/// Toggle a skill's enabled state.
+/// Toggle a skill's enabled state by rewriting its SKILL.md frontmatter.
 pub fn toggle_skill(name: &str, enabled: bool) -> Result<(), String> {
-    set_skill_enabled(name, enabled)?;
+    let skills_dir = get_skills_dir()?;
+    let skill_file = skills_dir.join(name).join("SKILL.md");
+
+    if !skill_file.exists() {
+        return Err(format!("Skill '{}' not found", name));
+    }
+
+    let content = std::fs::read_to_string(&skill_file)
+        .map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
+
+    let (mut fm, body) = parse_skill_md(&content)
+        .ok_or_else(|| "Failed to parse SKILL.md".to_string())?;
+
+    fm.enabled = enabled;
+
+    // Rewrite the file with updated frontmatter
+    let yaml = serde_yaml::to_string(&fm)
+        .map_err(|e| format!("Failed to serialize frontmatter: {}", e))?;
+    let new_content = format!("---\n{}---\n\n{}\n", yaml, body);
+    std::fs::write(&skill_file, new_content)
+        .map_err(|e| format!("Failed to write SKILL.md: {}", e))?;
+
     info!("Skill '{}' {}", name, if enabled { "enabled" } else { "disabled" });
     Ok(())
 }
@@ -396,6 +228,7 @@ version: "0.1.0"
 author: user
 tags: [custom]
 icon: "🛠️"
+enabled: true
 ---
 
 # {}
@@ -435,10 +268,6 @@ fn uninstall_skill(name: &str) -> Result<(), String> {
     std::fs::remove_dir_all(&skill_dir)
         .map_err(|e| format!("Failed to remove skill '{}': {}", name, e))?;
 
-    // Also remove from database
-    let conn = SKILLS_DB.lock();
-    let _ = conn.execute("DELETE FROM skill_states WHERE name = ?1", params![name]);
-
     info!("Uninstalled skill: {}", name);
     Ok(())
 }
@@ -447,7 +276,6 @@ fn uninstall_skill(name: &str) -> Result<(), String> {
 fn install_from_git(url: &str) -> Result<String, String> {
     let skills_dir = ensure_skills_dir()?;
 
-    // Extract repo name from URL for the skill directory name
     let repo_name = url
         .trim_end_matches('/')
         .rsplit('/')
@@ -456,12 +284,10 @@ fn install_from_git(url: &str) -> Result<String, String> {
         .trim_end_matches(".git");
 
     let target_dir = skills_dir.join(repo_name);
-
     if target_dir.exists() {
         return Err(format!("Skill '{}' already exists. Uninstall first.", repo_name));
     }
 
-    // Clone the repository
     let output = std::process::Command::new("git")
         .args(["clone", "--depth", "1", url, &target_dir.to_string_lossy()])
         .output()
@@ -472,10 +298,8 @@ fn install_from_git(url: &str) -> Result<String, String> {
         return Err(format!("Git clone failed: {}", stderr));
     }
 
-    // Verify SKILL.md exists
     let skill_file = target_dir.join("SKILL.md");
     if !skill_file.exists() {
-        // Cleanup
         let _ = std::fs::remove_dir_all(&target_dir);
         return Err("Repository does not contain a SKILL.md file".to_string());
     }
@@ -534,25 +358,13 @@ pub async fn skills_open_dir() -> Result<String, String> {
     let path = skills_dir.to_string_lossy().to_string();
 
     #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open")
-            .arg(&path)
-            .spawn();
-    }
+    { let _ = std::process::Command::new("open").arg(&path).spawn(); }
 
     #[cfg(target_os = "linux")]
-    {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn();
-    }
+    { let _ = std::process::Command::new("xdg-open").arg(&path).spawn(); }
 
     #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("explorer")
-            .arg(&path)
-            .spawn();
-    }
+    { let _ = std::process::Command::new("explorer").arg(&path).spawn(); }
 
     Ok(path)
 }
@@ -562,3 +374,41 @@ pub async fn skills_get_dir() -> Result<String, String> {
     let skills_dir = get_skills_dir()?;
     Ok(skills_dir.to_string_lossy().to_string())
 }
+
+// ============================================================================
+// Hot-Reload Watcher
+// ============================================================================
+
+/// Start a background task that scans the skills directory every 5 seconds
+/// and emits a `skills-changed` event when the skill list changes.
+pub fn start_skills_watcher() {
+    tauri::async_runtime::spawn(async {
+        use std::collections::HashSet;
+        let mut last_snapshot: HashSet<String> = HashSet::new();
+
+        // Ensure directory exists
+        let _ = ensure_skills_dir();
+
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+            let skills = scan_skills();
+            let current: HashSet<String> = skills
+                .iter()
+                .map(|s| format!("{}:{}:{}", s.name, s.version, s.enabled))
+                .collect();
+
+            if current != last_snapshot {
+                if !last_snapshot.is_empty() {
+                    // Only emit after the first scan (skip initial load)
+                    info!("[skills] Change detected, notifying frontend ({} skills)", skills.len());
+                    let payload = serde_json::json!({ "count": skills.len() });
+                    crate::modules::infra::log_bridge::emit_custom_event("skills-changed", payload);
+                }
+                last_snapshot = current;
+            }
+        }
+    });
+    info!("[skills] Hot-reload watcher started (scan every 5s)");
+}
+

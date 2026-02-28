@@ -595,6 +595,23 @@ pub fn clear_messages(account_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Delete the oldest N messages from conversation history for an account.
+/// Used by memory compaction to remove messages that have been summarized.
+pub fn delete_old_messages(account_id: &str, count: i64) -> Result<(), String> {
+    let conn = DB.lock().map_err(|e| format!("DB lock: {}", e))?;
+    conn.execute(
+        "DELETE FROM conversation_history
+         WHERE id IN (
+             SELECT id FROM conversation_history
+             WHERE account_id = ?1
+             ORDER BY created_at ASC
+             LIMIT ?2
+         )",
+        params![account_id, count],
+    ).map_err(|e| format!("Delete old messages: {}", e))?;
+    Ok(())
+}
+
 // ============================================================================
 // Memory (long-term key-value store)
 // ============================================================================

@@ -4,7 +4,7 @@
 //! cron expression scheduling, task execution (shell + agent), and
 //! notification dispatch on completion.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use cron::Schedule;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -636,4 +636,79 @@ pub async fn cron_validate_expr(expr: String) -> Result<Value, String> {
             "error": e,
         })),
     }
+}
+
+// ============================================================================
+// Heartbeat System (Inspired by CoPaw's HEARTBEAT.md)
+// ============================================================================
+
+/// Default heartbeat interval in seconds (30 minutes)
+const HEARTBEAT_INTERVAL_SECS: u64 = 30 * 60;
+
+/// Check if heartbeat is configured (HEARTBEAT.md exists in ~/.helix/)
+fn load_heartbeat_config() -> Option<String> {
+    let helix_dir = dirs::home_dir()?.join(".helix");
+    let heartbeat_path = helix_dir.join("HEARTBEAT.md");
+    std::fs::read_to_string(&heartbeat_path).ok()
+}
+
+/// Start the heartbeat loop. Reads ~/.helix/HEARTBEAT.md periodically
+/// and sends its content as a prompt to the agent.
+pub fn start_heartbeat() {
+    tauri::async_runtime::spawn(async move {
+        // Wait 60 seconds after startup before first heartbeat
+        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+
+        let mut interval = tokio::time::interval(
+            tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS)
+        );
+
+        info!("Heartbeat system started (interval: {}s)", HEARTBEAT_INTERVAL_SECS);
+
+        loop {
+            interval.tick().await;
+
+            // Check if HEARTBEAT.md exists
+            let heartbeat_content = match load_heartbeat_config() {
+                Some(content) if !content.trim().is_empty() => content,
+                _ => continue, // No heartbeat config, skip
+            };
+
+            // Check active hours (default: 8:00 - 23:00)
+            let hour = chrono::Local::now().hour();
+            if !(8..=23).contains(&hour) {
+                continue; // Outside active hours
+            }
+
+            info!("[heartbeat] Executing heartbeat check");
+
+            // Build heartbeat prompt
+            let prompt = format!(
+                "[HEARTBEAT] {}\n\n{}\n\nIf nothing needs attention, respond with HEARTBEAT_OK.",
+                chrono::Local::now().format("%Y-%m-%d %H:%M"),
+                heartbeat_content.trim()
+            );
+
+            // Run through the agent
+            match crate::modules::agent::agent_process_message(
+                "heartbeat",
+                &prompt,
+                None,
+            ).await {
+                Ok(response) => {
+                    if response.trim() != "HEARTBEAT_OK" && !response.is_empty() {
+                        info!("[heartbeat] Agent response: {}", &response[..response.len().min(200)]);
+                        // Emit heartbeat result to frontend
+                        crate::modules::agent::emit_agent_progress(
+                            "heartbeat",
+                            serde_json::json!({ "response": response }),
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("[heartbeat] Agent error: {}", e);
+                }
+            }
+        }
+    });
 }

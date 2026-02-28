@@ -24,21 +24,21 @@ static SHARED_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
     });
 
 
-/// Tracks files sent in the current agent session (metadata for response).
-static SENT_FILES: std::sync::LazyLock<Mutex<Vec<Value>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+/// Tracks files sent per agent session (keyed by account_id).
+static SENT_FILES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Vec<Value>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-/// Call at the start of each agent call to reset sent-file tracking.
-pub fn clear_sent_files() {
-    if let Ok(mut files) = SENT_FILES.lock() {
-        files.clear();
+/// Call at the start of each agent call to reset sent-file tracking for a session.
+pub fn clear_sent_files_for(session_id: &str) {
+    if let Ok(mut map) = SENT_FILES.lock() {
+        map.remove(session_id);
     }
 }
 
-/// Get and clear sent files metadata (called by agent_chat to include in response)
-pub fn take_sent_files() -> Vec<Value> {
-    if let Ok(mut files) = SENT_FILES.lock() {
-        std::mem::take(&mut *files)
+/// Get and clear sent files metadata for a session
+pub fn take_sent_files_for(session_id: &str) -> Vec<Value> {
+    if let Ok(mut map) = SENT_FILES.lock() {
+        map.remove(session_id).unwrap_or_default()
     } else {
         Vec::new()
     }
@@ -328,6 +328,26 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
+        agents_sdk::tool(
+            "get_current_time",
+            "Get the current system time with timezone information. Useful for time-sensitive tasks, scheduling, and when you need the exact current time.",
+            schema(vec![], vec![]),
+            |_args: Value, ctx: ToolContext| async move {
+                let r = tool_get_current_time();
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "desktop_screenshot",
+            "Capture a screenshot of the current desktop screen. Returns the path to the saved screenshot image.",
+            schema(vec![
+                param("display", "integer", Some("Display number to capture (default: main display)")),
+            ], vec![]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_desktop_screenshot(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
     ]
 }
 
@@ -352,6 +372,8 @@ pub async fn execute_tool(name: &str, args: &Value, _ctx: Option<&str>) -> Resul
         "process_kill"   => tool_process_kill(args).await,
         "sysinfo"        => tool_sysinfo(args),
         "chat_send_file" => tool_chat_send_file(args).await,
+        "get_current_time" => Ok(tool_get_current_time()),
+        "desktop_screenshot" => tool_desktop_screenshot(args).await,
         other => Err(format!("Unknown tool: {}", other)),
     }
 }
@@ -377,9 +399,20 @@ async fn tool_shell_exec(args: &Value) -> Result<String, String> {
         .as_str()
         .map(|s| expand_path(s))
         .unwrap_or_else(|| {
-            dirs::home_dir()
-                .map(|h| h.to_string_lossy().to_string())
-                .unwrap_or_else(|| ".".to_string())
+            // Use session workspace if set, otherwise fall back to sandbox
+            let ws_path = super::core::SESSION_WORKSPACE
+                .try_with(|ws| ws.clone())
+                .ok()
+                .flatten()
+                .map(|w| expand_path(&w))
+                .unwrap_or_else(|| {
+                    let sandbox = dirs::home_dir()
+                        .map(|h| h.join(".helix").join("sandbox"))
+                        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/helix-sandbox"));
+                    sandbox.to_string_lossy().to_string()
+                });
+            let _ = std::fs::create_dir_all(&ws_path);
+            ws_path
         });
     let timeout = args["timeout_secs"].as_u64().unwrap_or(30);
 
@@ -493,9 +526,15 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         _            => "application/octet-stream",
     };
 
-    if let Ok(files) = SENT_FILES.lock() {
-        if files.iter().any(|f| f["path"].as_str() == Some(&path)) {
-            return Ok(format!("文件「{}」已经发送过了，无需重复发送。", display_name));
+    let session_key = super::core::SESSION_ACCOUNT_ID
+        .try_with(|id| id.clone())
+        .unwrap_or_else(|_| "default".to_string());
+
+    if let Ok(map) = SENT_FILES.lock() {
+        if let Some(files) = map.get(&session_key) {
+            if files.iter().any(|f| f["path"].as_str() == Some(&path)) {
+                return Ok(format!("文件「{}」已经发送过了，无需重复发送。", display_name));
+            }
         }
     }
 
@@ -506,8 +545,8 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         "size": size_str,
     });
     info!("[chat_send_file] Stored file metadata: name={}, path={}", display_name, path);
-    if let Ok(mut files) = SENT_FILES.lock() {
-        files.push(file_meta);
+    if let Ok(mut map) = SENT_FILES.lock() {
+        map.entry(session_key).or_insert_with(Vec::new).push(file_meta);
     }
 
     Ok(format!("✅ 文件「{}」({})已发送到对话框，用户可以点击「另存为」下载。", display_name, size_str))
@@ -1096,4 +1135,91 @@ pub async fn tool_image_describe(image_path: String, prompt: Option<String>) -> 
 
     let data: Value = resp.json().await.map_err(|e| format!("parse: {}", e))?;
     Ok(data["choices"][0]["message"]["content"].as_str().unwrap_or("Unable to describe image").to_string())
+}
+
+// ---- Get Current Time ----
+fn tool_get_current_time() -> String {
+    let now = chrono::Local::now();
+    let time_str = now.format("%Y-%m-%d %H:%M:%S %Z (UTC%z)").to_string();
+    format!("🕐 Current time: {}", time_str)
+}
+
+// ---- Desktop Screenshot ----
+async fn tool_desktop_screenshot(args: &Value) -> Result<String, String> {
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let screenshot_dir = dirs::home_dir()
+        .ok_or("Cannot find home directory")?
+        .join(".helix")
+        .join("screenshots");
+    std::fs::create_dir_all(&screenshot_dir)
+        .map_err(|e| format!("Failed to create screenshots dir: {}", e))?;
+
+    let filename = format!("screenshot_{}.png", timestamp);
+    let filepath = screenshot_dir.join(&filename);
+    let filepath_str = filepath.to_string_lossy().to_string();
+
+    if cfg!(target_os = "macos") {
+        // macOS: use screencapture
+        let mut cmd_args = vec!["-x".to_string()];
+        if let Some(display) = args["display"].as_u64() {
+            cmd_args.push("-D".to_string());
+            cmd_args.push(display.to_string());
+        }
+        cmd_args.push(filepath_str.clone());
+
+        let output = tokio::process::Command::new("screencapture")
+            .args(&cmd_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| format!("screencapture failed: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Screenshot failed: {}", stderr));
+        }
+    } else if cfg!(target_os = "linux") {
+        // Linux: try gnome-screenshot or scrot
+        let output = tokio::process::Command::new("gnome-screenshot")
+            .arg("-f")
+            .arg(&filepath_str)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+
+        match output {
+            Ok(o) if o.status.success() => {},
+            _ => {
+                // Fallback to scrot
+                let output = tokio::process::Command::new("scrot")
+                    .arg(&filepath_str)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await
+                    .map_err(|e| format!("scrot failed: {}", e))?;
+                if !output.status.success() {
+                    return Err("Screenshot failed: no screenshot tool available (tried gnome-screenshot, scrot)".to_string());
+                }
+            }
+        }
+    } else {
+        return Err("Desktop screenshot is not supported on this OS".to_string());
+    }
+
+    // Verify screenshot was created
+    if !filepath.exists() {
+        return Err("Screenshot file was not created".to_string());
+    }
+
+    let meta = std::fs::metadata(&filepath)
+        .map_err(|e| format!("Cannot read screenshot metadata: {}", e))?;
+    let size_kb = meta.len() / 1024;
+
+    Ok(format!(
+        "📸 Screenshot saved: {}\n  Size: {} KB\n  Use `chat_send_file` with this path to share it with the user.",
+        filepath_str, size_kb
+    ))
 }

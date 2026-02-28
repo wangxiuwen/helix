@@ -73,6 +73,13 @@ export default function Skills() {
     useEffect(() => {
         loadSkills();
         invoke<string>('skills_get_dir').then(setSkillsDir).catch(() => { });
+
+        // Hot-reload: listen for backend skills-changed event
+        let unlisten: (() => void) | null = null;
+        import('@tauri-apps/api/event').then(({ listen }) => {
+            listen<any>('skills-changed', () => { loadSkills(); }).then(fn => { unlisten = fn; });
+        });
+        return () => { if (unlisten) unlisten(); };
     }, []);
 
     const handleToggle = async (skill: Skill) => {

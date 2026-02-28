@@ -710,3 +710,179 @@ pub async fn memory_flush(days_back: Option<i64>) -> Result<String, String> {
 pub async fn memory_list_files() -> Result<Vec<String>, String> {
     list_memory_files()
 }
+
+// ============================================================================
+// Memory Compaction — Compress old conversation history into summaries
+// (Inspired by CoPaw's MemoryCompactionHook)
+// ============================================================================
+
+/// Character threshold for triggering compaction.
+const COMPACTION_CHAR_THRESHOLD: usize = 50_000;
+/// Number of recent messages to always preserve during compaction.
+const COMPACTION_KEEP_RECENT: usize = 10;
+
+/// Get the compressed conversation summary for an account.
+pub fn get_compressed_summary(account_id: &str) -> Option<String> {
+    let conn = MEMORY_DB.lock();
+    // Try to create the table if it doesn't exist
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS conversation_summaries (
+            account_id TEXT PRIMARY KEY,
+            summary TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );"
+    );
+    conn.query_row(
+        "SELECT summary FROM conversation_summaries WHERE account_id = ?1",
+        params![account_id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Save a compressed conversation summary for an account.
+pub fn save_compressed_summary(account_id: &str, summary: &str) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let conn = MEMORY_DB.lock();
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS conversation_summaries (
+            account_id TEXT PRIMARY KEY,
+            summary TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );"
+    );
+    conn.execute(
+        "INSERT OR REPLACE INTO conversation_summaries (account_id, summary, updated_at)
+         VALUES (?1, ?2, ?3)",
+        params![account_id, summary, now],
+    )
+    .map_err(|e| format!("save summary: {}", e))?;
+    Ok(())
+}
+
+/// Check if conversation history needs compaction and return
+/// (needs_compaction, total_chars, history_len).
+pub fn check_compaction_needed(history: &[crate::modules::database::ConversationEntry]) -> (bool, usize) {
+    let total_chars: usize = history.iter().map(|h| h.content.len()).sum();
+    (total_chars > COMPACTION_CHAR_THRESHOLD && history.len() > COMPACTION_KEEP_RECENT, total_chars)
+}
+
+/// Build the compaction prompt: ask LLM to summarize older messages.
+pub fn build_compaction_prompt(
+    messages_to_compact: &[crate::modules::database::ConversationEntry],
+    previous_summary: Option<&str>,
+) -> String {
+    let mut prompt = String::new();
+
+    if let Some(prev) = previous_summary {
+        prompt.push_str(&format!(
+            "Previous conversation summary:\n{}\n\n---\n\n",
+            prev
+        ));
+    }
+
+    prompt.push_str("Please summarize the following conversation into a concise but comprehensive summary. ");
+    prompt.push_str("Preserve key decisions, facts, user preferences, technical details, and action items. ");
+    prompt.push_str("Write the summary in the same language as the conversation.\n\n");
+
+    for msg in messages_to_compact {
+        let role = if msg.role == "user" { "User" } else { "Assistant" };
+        // Truncate very long messages to avoid exceeding context
+        let content = if msg.content.len() > 2000 {
+            format!("{}...[truncated]", &msg.content[..2000])
+        } else {
+            msg.content.clone()
+        };
+        prompt.push_str(&format!("**{}**: {}\n\n", role, content));
+    }
+
+    prompt.push_str("\n---\nSummary:");
+    prompt
+}
+
+/// Compact conversation history: summarize old messages and save the summary.
+/// Returns the number of messages compacted.
+pub async fn compact_conversation_history(
+    account_id: &str,
+) -> Result<usize, String> {
+    let history = crate::modules::database::get_conversation_history(account_id, 200)?;
+
+    let (needs_compaction, total_chars) = check_compaction_needed(&history);
+    if !needs_compaction {
+        return Ok(0);
+    }
+
+    info!(
+        "[memory] Compaction triggered for {}: {} chars, {} messages",
+        account_id, total_chars, history.len()
+    );
+
+    // Split: keep recent N messages, compact the rest
+    let split_point = history.len().saturating_sub(COMPACTION_KEEP_RECENT);
+    let messages_to_compact = &history[..split_point];
+
+    if messages_to_compact.is_empty() {
+        return Ok(0);
+    }
+
+    // Build compaction prompt
+    let previous_summary = get_compressed_summary(account_id);
+    let prompt = build_compaction_prompt(messages_to_compact, previous_summary.as_deref());
+
+    // Call LLM to generate summary
+    let config = crate::modules::config::load_app_config()
+        .map_err(|e| format!("config: {}", e))?;
+    let ai = &config.ai_config;
+    if ai.api_key.is_empty() {
+        return Err("API key not configured for compaction".to_string());
+    }
+
+    let url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
+    let body = json!({
+        "model": ai.model,
+        "messages": [
+            {"role": "system", "content": "You are a precise summarizer. Create concise but comprehensive summaries."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 2000,
+        "temperature": 0.3
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", ai.api_key))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("compaction LLM call: {}", e))?;
+
+    if !resp.status().is_success() {
+        let err = resp.text().await.unwrap_or_default();
+        return Err(format!("compaction API error: {}", &err[..err.len().min(300)]));
+    }
+
+    let data: Value = resp.json().await.map_err(|e| format!("parse: {}", e))?;
+    let summary = data["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("(compaction failed)")
+        .to_string();
+
+    // Save the compressed summary
+    save_compressed_summary(account_id, &summary)?;
+
+    // Delete the compacted messages from the conversation history
+    let compacted_count = messages_to_compact.len();
+    crate::modules::database::delete_old_messages(account_id, compacted_count as i64)?;
+
+    info!(
+        "[memory] Compacted {} messages for {} (summary: {} chars)",
+        compacted_count, account_id, summary.len()
+    );
+
+    Ok(compacted_count)
+}

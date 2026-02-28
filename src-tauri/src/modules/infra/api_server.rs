@@ -158,7 +158,7 @@ async fn agent_chat(Json(req): Json<AgentChatRequest>) -> impl IntoResponse {
 
     info!("[API] agent_chat: account={}, msg={}", account_id, &req.message);
 
-    match agent::agent_process_message(&account_id, &req.message).await {
+    match agent::agent_process_message(&account_id, &req.message, None).await {
         Ok(reply) => (
             StatusCode::OK,
             Json(AgentChatResponse { reply, error: None }),

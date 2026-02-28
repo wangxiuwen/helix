@@ -9,6 +9,7 @@ import {
     Check,
     ChevronRight,
     ChevronUp,
+    FolderOpen,
     ImagePlus,
     Plus,
     RefreshCw,
@@ -78,7 +79,6 @@ function AIChat() {
     const {
         chatSessions,
         activeChatId,
-        loading,
         createChatSession,
         deleteChatSession,
         setActiveChatId,
@@ -87,6 +87,8 @@ function AIChat() {
         aiProviders,
         updateAIProvider,
     } = useDevOpsStore();
+
+    const isSessionLoading = !!useDevOpsStore(s => s.loading[`chat-${activeChatId}`]);
 
     const [input, setInput] = useState('');
     const [pendingImages, setPendingImages] = useState<string[]>([]);
@@ -192,7 +194,7 @@ function AIChat() {
     };
 
     const handleSend = async () => {
-        if ((!input.trim() && pendingImages.length === 0) || loading.chat) return;
+        if ((!input.trim() && pendingImages.length === 0) || isSessionLoading) return;
         setAgentStatus([]);
         const msg = input.trim();
         const imgs = [...pendingImages];
@@ -299,7 +301,12 @@ function AIChat() {
                                         <span className="text-[10px] text-gray-400 shrink-0 ml-2">{getLastTime(session)}</span>
                                     </div>
                                     <div className="flex items-center justify-between mt-0.5">
-                                        <p className="text-xs text-gray-400 truncate">{getLastMessage(session) || <span className="italic opacity-50">新对话</span>}</p>
+                                        <p className="text-xs text-gray-400 truncate">
+                                            {session.workspace
+                                                ? <span className="flex items-center gap-1"><FolderOpen size={10} />{session.workspace.split('/').pop()}</span>
+                                                : (getLastMessage(session) || <span className="italic opacity-50">新对话</span>)
+                                            }
+                                        </p>
                                         <button
                                             className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-red-400 transition-all shrink-0 ml-1"
                                             onClick={(e) => { e.stopPropagation(); deleteChatSession(session.id); }}
@@ -347,6 +354,11 @@ function AIChat() {
                             data-tauri-drag-region
                         >
                             <h3 className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate pointer-events-none">{activeSession.title}</h3>
+                            {activeSession.workspace && (
+                                <span className="text-[11px] text-gray-400 ml-2 flex items-center gap-1 pointer-events-none">
+                                    <FolderOpen size={11} />{activeSession.workspace}
+                                </span>
+                            )}
                         </div>
 
                         {/* messages */}
@@ -478,7 +490,7 @@ function AIChat() {
                                     </div>
                                 </div>
                             ))}
-                            {loading.chat && (
+                            {isSessionLoading && (
                                 <div className="flex gap-2.5">
                                     <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mt-0.5">
                                         <Bot size={15} className="text-white" />
@@ -635,10 +647,10 @@ function AIChat() {
                                 <div className="flex-1" />
 
                                 {/* Send / Stop */}
-                                {loading.chat ? (
+                                {isSessionLoading ? (
                                     <button
                                         className="px-4 py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors flex items-center gap-1.5"
-                                        onClick={() => invoke('agent_cancel')}
+                                        onClick={() => invoke('agent_cancel', { sessionId: activeChatId })}
                                     >
                                         <Square size={11} fill="white" />
                                         {t('chat.stop', '停止')}

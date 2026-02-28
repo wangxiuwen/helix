@@ -117,7 +117,7 @@ pub async fn route_inbound_message(msg: &InboundMessage) -> Result<String, Strin
         &msg.content[..msg.content.len().min(50)]
     );
 
-    let reply = crate::modules::agent::agent_process_message(&msg.session_key, &msg.content).await?;
+    let reply = crate::modules::agent::agent_process_message(&msg.session_key, &msg.content, None).await?;
 
     info!(
         "[{}] Reply: '{}'",
