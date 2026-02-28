@@ -35,6 +35,9 @@ pub use app::scheduler;
 pub use app::cron;
 pub use app::update_checker;
 pub use app::cloudflared;
+pub use app::workspace;
+pub use app::environments;
+pub use app::mcp;
 
 // agent (core re-exported via agent/mod.rs `pub use core::*`)
 pub use agent::tools as agent_tools;

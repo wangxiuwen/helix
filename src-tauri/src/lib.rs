@@ -162,6 +162,8 @@ pub fn run() {
             // Start skills hot-reload watcher (scans ~/.helix/skills/ every 5s)
             modules::skills::start_skills_watcher();
 
+            // Load user-defined environment variables from ~/.helix/envs.json
+            modules::environments::apply_envs_to_process();
 
             // Initialize hooks tables
             if let Err(e) = modules::hooks::init_hooks_tables() {
@@ -401,6 +403,22 @@ pub fn run() {
             // Subagents
             modules::subagents::spawn_subagent,
             modules::subagents::spawn_subagents_batch,
+            // Workspace
+            modules::workspace::workspace_list_files,
+            modules::workspace::workspace_read_file,
+            modules::workspace::workspace_write_file,
+            modules::workspace::workspace_delete_file,
+            modules::workspace::workspace_get_dir,
+            // Environments
+            modules::environments::envs_list,
+            modules::environments::envs_set,
+            modules::environments::envs_delete,
+            // MCP
+            modules::mcp::mcp_list,
+            modules::mcp::mcp_create,
+            modules::mcp::mcp_toggle,
+            modules::mcp::mcp_delete,
+            modules::mcp::mcp_update,
 
         ])
         .build(tauri::generate_context!())

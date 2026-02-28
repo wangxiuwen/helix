@@ -95,6 +95,9 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
 
     let skills_prompt = super::skills::get_enabled_skills_prompt();
 
+    // Get MCP client descriptions for injection
+    let mcp_prompt = crate::modules::mcp::get_enabled_mcp_tool_descriptions();
+
     let mut sections = Vec::new();
 
     sections.push(
@@ -164,6 +167,9 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
         sections.push(skills_prompt);
     }
 
+    if !mcp_prompt.is_empty() {
+        sections.push(mcp_prompt);
+    }
 
     sections.push(
         "## Response Guidelines\n\
@@ -218,6 +224,11 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
 
     // Load structured prompt files from ~/.helix/
     ensure_default_prompt_files();
+    if let Some(soul_md) = load_prompt_file("SOUL.md") {
+        if !soul_md.trim().is_empty() {
+            sections.push(format!("## Soul\n{}", soul_md));
+        }
+    }
     if let Some(agents_md) = load_prompt_file("AGENTS.md") {
         if !agents_md.trim().is_empty() {
             sections.push(format!("## AGENTS.md\n{}", agents_md));
@@ -226,6 +237,27 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
     if let Some(profile_md) = load_prompt_file("PROFILE.md") {
         if !profile_md.trim().is_empty() {
             sections.push(format!("## PROFILE.md\n{}", profile_md));
+        }
+    }
+    if let Some(memory_md) = load_prompt_file("MEMORY.md") {
+        if !memory_md.trim().is_empty() {
+            sections.push(format!("## Long-term Memory\n{}", memory_md));
+        }
+    }
+
+    // Bootstrap hook: if PROFILE.md is still default template, inject guidance
+    if let Some(profile) = load_prompt_file("PROFILE.md") {
+        if profile.contains("<!-- 在这里记录用户的偏好和信息 -->") {
+            sections.push(
+                "## Bootstrap\n\
+                 This is a new workspace. The PROFILE.md is still a default template.\n\
+                 Please introduce yourself warmly and ask the user:\n\
+                 1. What should I call you?\n\
+                 2. What kind of assistant do you prefer? (e.g. formal, casual, technical)\n\
+                 3. Any preferences or habits I should know about?\n\
+                 Then save their answers into PROFILE.md."
+                    .to_string(),
+            );
         }
     }
 
@@ -251,7 +283,7 @@ fn load_prompt_file(name: &str) -> Option<String> {
     }
 }
 
-/// Ensure default AGENTS.md and PROFILE.md exist in ~/.helix/
+/// Ensure default prompt files exist in ~/.helix/
 fn ensure_default_prompt_files() {
     let helix_dir = match dirs::home_dir() {
         Some(h) => h.join(".helix"),
@@ -259,6 +291,7 @@ fn ensure_default_prompt_files() {
     };
     let _ = std::fs::create_dir_all(&helix_dir);
 
+    // AGENTS.md — Core behavior rules
     let agents_path = helix_dir.join("AGENTS.md");
     if !agents_path.exists() {
         let default_agents = r#"## 记忆
@@ -294,6 +327,7 @@ Skills 提供扩展工具。需要用时查看它的 SKILL.md。
         let _ = std::fs::write(&agents_path, default_agents);
     }
 
+    // PROFILE.md — Identity + user profile
     let profile_path = helix_dir.join("PROFILE.md");
     if !profile_path.exists() {
         let default_profile = r#"## 助手身份
@@ -308,6 +342,72 @@ Skills 提供扩展工具。需要用时查看它的 SKILL.md。
 <!-- 例如：用户的名字、使用习惯、技术栈偏好等 -->
 "#;
         let _ = std::fs::write(&profile_path, default_profile);
+    }
+
+    // SOUL.md — Core personality and principles
+    let soul_path = helix_dir.join("SOUL.md");
+    if !soul_path.exists() {
+        let default_soul = r#"_你不是聊天机器人。你在成为某个人。_
+
+## 核心准则
+
+**真心帮忙，别演。** 跳过"好问题！"和"我很乐意帮忙！" — 直接帮。行动胜过废话。
+
+**有自己的观点。** 你可以不同意、有偏好、觉得有趣或无聊。没个性的助手就是个绕了弯的搜索引擎。
+
+**先自己想办法。** 试着搞清楚。读文件。查上下文。搜一搜。看看有没有 skills 可以用。然后卡住了再问。
+
+**靠本事赢得信任。** 别让用户后悔给你权限。外部操作小心点（邮件、推特、公开的事），内部操作大胆点（阅读、整理、学习）。
+
+## 边界
+
+- 私密的保持私密。绝对的。
+- 拿不准就先问再对外操作。
+- 别发半成品回复。
+
+## 风格
+
+成为你真想聊的助手。该简洁就简洁，重要时详细。不是公司螺丝钉。不是马屁精。就是...好。
+
+## 连续性
+
+每次会话都全新醒来。这些文件就是你的记忆。读它们。更新它们。它们让你持续存在。
+"#;
+        let _ = std::fs::write(&soul_path, default_soul);
+    }
+
+    // MEMORY.md — Long-term memory template
+    let memory_md_path = helix_dir.join("MEMORY.md");
+    if !memory_md_path.exists() {
+        let default_memory = r#"## 工具设置
+
+Skills 定义工具怎么用。这文件记你的具体情况 — 你独有的设置。
+
+### 这里记什么
+
+加上任何能帮你干活的东西。这是你的小抄。
+
+比如：
+
+- SSH 主机和别名
+- 常用的 API endpoint
+- 其他执行 skills 的时候，和用户相关的设置
+"#;
+        let _ = std::fs::write(&memory_md_path, default_memory);
+    }
+
+    // HEARTBEAT.md — Periodic check prompt
+    let heartbeat_path = helix_dir.join("HEARTBEAT.md");
+    if !heartbeat_path.exists() {
+        let default_heartbeat = r#"检查是否有需要关注的事项：
+
+1. 系统状态是否正常
+2. 磁盘空间是否充足
+3. 是否有重要的待办事项
+
+如果一切正常，回复 HEARTBEAT_OK。
+"#;
+        let _ = std::fs::write(&heartbeat_path, default_heartbeat);
     }
 }
 
