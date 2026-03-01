@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useDevOpsStore, AIProvider } from '../stores/useDevOpsStore';
 import { invoke } from '@tauri-apps/api/core';
+import i18n from '../i18n';
 
 // Models that support image input (from provider config modalities)
 const IMAGE_CAPABLE_MODELS = new Set(['qwen3.5-plus', 'kimi-k2.5']);
@@ -59,13 +60,13 @@ if (!window.__helix_listeners_registered) {
         listen('agent-progress', (event: any) => {
             const { type, data } = event.payload;
             if (type === 'thinking') {
-                const msg = `🤔 思考中... (模型: ${data.model})`;
+                const msg = i18n.t('chat.thinking', { model: data.model, defaultValue: `🤔 思考中... (模型: ${data.model})` });
                 const arr = window.__helix_agent_status;
                 if (arr[arr.length - 1] !== msg) arr.push(msg);
             } else if (type === 'tool_call') {
-                window.__helix_agent_status.push(`🔧 调用工具: ${data.name}`);
+                window.__helix_agent_status.push(i18n.t('chat.tool_calling', { name: data.name, defaultValue: `🔧 调用工具: ${data.name}` }));
             } else if (type === 'tool_result') {
-                window.__helix_agent_status.push(`✅ ${data.name} 完成 (${data.chars} 字符)`);
+                window.__helix_agent_status.push(i18n.t('chat.tool_done', { name: data.name, chars: data.chars, defaultValue: `✅ ${data.name} 完成 (${data.chars} 字符)` }));
             } else if (type === 'done' || type === 'cancelled') {
                 window.__helix_agent_status = [];
             }
@@ -85,7 +86,6 @@ function AIChat() {
         sendMessage,
         confirmToolExecution,
         aiProviders,
-        updateAIProvider,
     } = useDevOpsStore();
 
     const isSessionLoading = !!useDevOpsStore(s => s.loading[`chat-${activeChatId}`]);
@@ -110,8 +110,9 @@ function AIChat() {
     const providerMenuRef = useRef<HTMLDivElement>(null);
     const modelMenuRef = useRef<HTMLDivElement>(null);
 
-    const activeProvider = aiProviders.find((p) => p.enabled) ?? null;
-    const currentModel = activeProvider?.defaultModel ?? '';
+    const activeGlobalProvider = aiProviders.find((p) => p.enabled) ?? null;
+    const currentSessionProvider = (activeSession?.provider ? aiProviders.find(p => p.id === activeSession.provider) : activeGlobalProvider) ?? activeGlobalProvider;
+    const currentModel = activeSession?.model || currentSessionProvider?.defaultModel || '';
     const supportsImages = IMAGE_CAPABLE_MODELS.has(currentModel);
 
     // Display: fetched models, always include currentModel at top if not in list
@@ -144,14 +145,14 @@ function AIChat() {
 
     // Auto-fetch models from API when provider changes
     useEffect(() => {
-        if (!activeProvider?.baseUrl) { setFetchedModels([]); return; }
+        if (!currentSessionProvider?.baseUrl) { setFetchedModels([]); return; }
         let cancelled = false;
         setFetchingModels(true);
-        fetchModelsFromProvider(activeProvider).then((models) => {
+        fetchModelsFromProvider(currentSessionProvider).then((models) => {
             if (!cancelled) { setFetchedModels(models); setFetchingModels(false); }
         });
         return () => { cancelled = true; };
-    }, [activeProvider?.id, activeProvider?.baseUrl, activeProvider?.apiKey]);
+    }, [currentSessionProvider?.id, currentSessionProvider?.baseUrl, currentSessionProvider?.apiKey]);
 
     // Close menus on outside click
     useEffect(() => {
@@ -305,7 +306,7 @@ function AIChat() {
                                         <p className="text-xs text-gray-400 truncate">
                                             {session.workspace
                                                 ? <span className="flex items-center gap-1"><FolderOpen size={10} />{session.workspace.split('/').pop()}</span>
-                                                : (getLastMessage(session) || <span className="italic opacity-50">新对话</span>)
+                                                : (getLastMessage(session) || <span className="italic opacity-50">{t('chat.new_chat', '新对话')}</span>)
                                             }
                                         </p>
                                         <button
@@ -427,7 +428,7 @@ function AIChat() {
                                                                                 a.click();
                                                                             }}
                                                                         >
-                                                                            ⬇ 下载
+                                                                            {t('chat.download', '⬇ 下载')}
                                                                         </button>
                                                                     </div>
                                                                 );
@@ -488,7 +489,7 @@ function AIChat() {
                                                                     } catch (e) { console.error('Save failed:', e); }
                                                                 }}
                                                             >
-                                                                ⬇ 另存为
+                                                                {t('chat.save_as', '⬇ 另存为')}
                                                             </button>
 
                                                         </div>
@@ -530,13 +531,13 @@ function AIChat() {
                         <div className="bg-[#f5f5f5] dark:bg-[#232323] border-t border-black/[0.06] dark:border-white/[0.06]">
                             {/* Toolbar row — icons above textarea, like WeChat */}
                             <div className="flex items-center gap-0.5 px-4 pt-2 pb-0">
-                                <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors" title="表情">
+                                <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors" title={t('chat.emoji', '表情')}>
                                     <Smile size={17} />
                                 </button>
                                 {supportsImages && (
                                     <button
                                         className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                                        title="上传图片"
+                                        title={t('chat.upload_image', '上传图片')}
                                         onClick={handleFileUpload}
                                     >
                                         <ImagePlus size={17} />
@@ -598,18 +599,25 @@ function AIChat() {
                                         onClick={() => { setShowProviderMenu(!showProviderMenu); setShowModelMenu(false); }}
                                     >
                                         <ChevronUp size={12} />
-                                        <span>{activeProvider?.name ?? '无提供商'}</span>
+                                        <span>{currentSessionProvider?.name ?? t('chat.no_provider_selected', '无提供商')}</span>
                                     </button>
                                     {showProviderMenu && (
                                         <div className="absolute bottom-full mb-1.5 left-0 min-w-[160px] bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
-                                            {aiProviders.length === 0 && <div className="px-3 py-2 text-xs text-gray-400">暂无提供商</div>}
+                                            {aiProviders.length === 0 && <div className="px-3 py-2 text-xs text-gray-400">{t('chat.no_providers', '暂无提供商')}</div>}
                                             {aiProviders.map((p) => (
                                                 <button
                                                     key={p.id}
-                                                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#383838] transition-colors ${p.enabled ? 'text-[#07c160]' : 'text-gray-600 dark:text-gray-300'}`}
-                                                    onClick={() => { useDevOpsStore.getState().updateAIProvider(p.id, { enabled: true }); setShowProviderMenu(false); }}
+                                                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#383838] transition-colors ${currentSessionProvider?.id === p.id ? 'text-[#07c160]' : 'text-gray-600 dark:text-gray-300'}`}
+                                                    onClick={() => {
+                                                        if (activeChatId) {
+                                                            useDevOpsStore.getState().updateChatSession(activeChatId, { provider: p.id, model: p.defaultModel || '' });
+                                                        } else {
+                                                            useDevOpsStore.getState().updateAIProvider(p.id, { enabled: true });
+                                                        }
+                                                        setShowProviderMenu(false);
+                                                    }}
                                                 >
-                                                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.enabled ? 'bg-[#07c160]' : 'bg-transparent'}`} />
+                                                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${currentSessionProvider?.id === p.id ? 'bg-[#07c160]' : 'bg-transparent'}`} />
                                                     {p.name}
                                                 </button>
                                             ))}
@@ -618,31 +626,34 @@ function AIChat() {
                                 </div>
 
                                 {/* Model picker */}
-                                {activeProvider && (
+                                {currentSessionProvider && (
                                     <div className="relative" ref={modelMenuRef}>
                                         <button
                                             className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                                             onClick={() => { setShowModelMenu(!showModelMenu); setShowProviderMenu(false); }}
                                         >
                                             <ChevronUp size={12} />
-                                            <span className="max-w-[180px] truncate">{currentModel || '选择模型'}</span>
+                                            <span className="max-w-[180px] truncate">{currentModel || t('chat.select_model', '选择模型')}</span>
                                             {fetchingModels && <RefreshCw size={10} className="animate-spin text-gray-400" />}
                                         </button>
                                         {showModelMenu && (
                                             <div className="absolute bottom-full mb-1.5 left-0 min-w-[220px] max-h-[320px] overflow-y-auto bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
                                                 {fetchingModels && displayModels.length === 0 && (
                                                     <div className="px-3 py-3 flex items-center gap-2 text-xs text-gray-400">
-                                                        <RefreshCw size={11} className="animate-spin" />获取模型列表中…
+                                                        <RefreshCw size={11} className="animate-spin" />{t('chat.fetching_models', '获取模型列表中…')}
                                                     </div>
                                                 )}
                                                 {!fetchingModels && displayModels.length === 0 && (
-                                                    <div className="px-3 py-2 text-xs text-gray-400">无可用模型</div>
+                                                    <div className="px-3 py-2 text-xs text-gray-400">{t('chat.no_models', '无可用模型')}</div>
                                                 )}
                                                 {displayModels.map((m) => (
                                                     <button
                                                         key={m}
                                                         className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#383838] transition-colors ${m === currentModel ? 'text-[#07c160]' : 'text-gray-600 dark:text-gray-300'}`}
-                                                        onClick={() => { updateAIProvider(activeProvider.id, { defaultModel: m }); setShowModelMenu(false); }}
+                                                        onClick={() => {
+                                                            if (activeChatId && currentSessionProvider) useDevOpsStore.getState().updateChatSession(activeChatId, { model: m, provider: currentSessionProvider.id });
+                                                            setShowModelMenu(false);
+                                                        }}
                                                     >
                                                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${m === currentModel ? 'bg-[#07c160]' : 'bg-transparent'}`} />
                                                         {m}

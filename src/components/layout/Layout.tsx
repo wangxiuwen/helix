@@ -22,7 +22,6 @@ import {
     Settings as SettingsIcon,
     Trash2,
     X,
-    Info,
     FolderOpen,
     Plug,
     KeyRound,
@@ -157,7 +156,7 @@ function Layout() {
             baseUrl: newProvider.baseUrl,
             apiKey: newProvider.apiKey || undefined,
             models: newProvider.models,
-            enabled: !!newProvider.apiKey,
+            enabled: true,
             defaultModel: newProvider.model || newProvider.models[0] || undefined,
         });
         setNewProvider({ name: '', type: 'openai', baseUrl: '', apiKey: '', model: '', models: [] });
@@ -222,12 +221,12 @@ function Layout() {
     ];
 
     const SETTINGS_MENU: Array<{ key: SettingsSection; icon: typeof Palette; label: string; group: string }> = [
-        { key: 'appearance', icon: Palette, label: '外观', group: '通用' },
-        { key: 'ai', icon: Bot, label: 'AI 提供商', group: '通用' },
-        { key: 'workspace', icon: FolderOpen, label: '工作空间', group: 'Agent' },
-        { key: 'mcp', icon: Plug, label: 'MCP', group: 'Agent' },
-        { key: 'environments', icon: KeyRound, label: '环境变量', group: 'Agent' },
-        { key: 'about', icon: Globe, label: '关于', group: '其他' },
+        { key: 'appearance', icon: Palette, label: t('settings.menu.appearance', '外观'), group: t('settings.groups.general', '通用') },
+        { key: 'ai', icon: Bot, label: t('settings.menu.ai_providers', 'AI 提供商'), group: t('settings.groups.general', '通用') },
+        { key: 'workspace', icon: FolderOpen, label: t('settings.menu.workspace', '工作空间'), group: t('settings.groups.agent', 'Agent') },
+        { key: 'mcp', icon: Plug, label: t('settings.menu.mcp', 'MCP'), group: t('settings.groups.agent', 'Agent') },
+        { key: 'environments', icon: KeyRound, label: t('settings.menu.environments', '环境变量'), group: t('settings.groups.agent', 'Agent') },
+        { key: 'about', icon: Globe, label: t('settings.menu.about', '关于'), group: t('settings.groups.other', '其他') },
     ];
 
     const menuGroups = SETTINGS_MENU.reduce<Record<string, typeof SETTINGS_MENU>>((acc, item) => {
@@ -242,10 +241,10 @@ function Layout() {
             case 'appearance':
                 return (
                     <div className="space-y-4">
-                        <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-4">外观设置</h3>
+                        <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-4">{t('settings.appearance.title', '外观设置')}</h3>
                         <div className="p-4 rounded-xl bg-white dark:bg-[#2e2e2e]">
                             <div className="flex items-center justify-between mb-4">
-                                <div><p className="text-sm font-medium text-gray-800 dark:text-gray-200">主题</p><p className="text-xs text-gray-400">切换明暗主题</p></div>
+                                <div><p className="text-sm font-medium text-gray-800 dark:text-gray-200">{t('settings.appearance.theme', '主题')}</p><p className="text-xs text-gray-400">{t('settings.appearance.theme_desc', '切换明暗主题')}</p></div>
                                 <div
                                     className={`relative w-11 h-6 rounded-full cursor-pointer transition-colors ${isDark ? 'bg-[#07c160]' : 'bg-gray-300'}`}
                                     onClick={toggleTheme}
@@ -272,9 +271,9 @@ function Layout() {
                 return (
                     <div className="space-y-4">
                         <div className="flex items-center justify-between mb-1">
-                            <h3 className="text-sm font-bold text-gray-800 dark:text-white">AI 提供商</h3>
+                            <h3 className="text-sm font-bold text-gray-800 dark:text-white">{t('settings.ai.title', 'AI 提供商')}</h3>
                             <button className="text-xs text-[#07c160] hover:underline" onClick={() => setShowAddProvider(!showAddProvider)}>
-                                {showAddProvider ? '取消' : '+ 添加'}
+                                {showAddProvider ? t('settings.ai.cancel', '取消') : '+ ' + t('settings.ai.add', '添加提供商')}
                             </button>
                         </div>
 
@@ -289,7 +288,7 @@ function Layout() {
                                 </select>
                                 {newProvider.name && (
                                     <>
-                                        <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder="名称" value={newProvider.name} onChange={(e) => setNewProvider({ ...newProvider, name: e.target.value })} />
+                                        <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder={t('settings.ai.name', '名称')} value={newProvider.name} onChange={(e) => setNewProvider({ ...newProvider, name: e.target.value })} />
                                         <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder="Base URL" value={newProvider.baseUrl} onChange={(e) => setNewProvider({ ...newProvider, baseUrl: e.target.value })} />
                                         <div className="relative">
                                             <input className="w-full px-2 py-1.5 pr-8 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder="API Key" type={showKeys['new'] ? 'text' : 'password'} value={newProvider.apiKey} onChange={(e) => setNewProvider({ ...newProvider, apiKey: e.target.value })} />
@@ -297,7 +296,7 @@ function Layout() {
                                                 {showKeys['new'] ? <EyeOff size={14} className="text-gray-400" /> : <Eye size={14} className="text-gray-400" />}
                                             </button>
                                         </div>
-                                        <button className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md" onClick={handleAddProvider}>保存</button>
+                                        <button className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md flex-shrink-0" onClick={handleAddProvider} disabled={!newProvider.name || !newProvider.baseUrl}>{t('settings.ai.confirm_add', '保存')}</button>
                                     </>
                                 )}
                             </div>
@@ -394,9 +393,9 @@ function Layout() {
                 return (
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                            <h3 className="text-sm font-bold text-gray-800 dark:text-white">MCP 客户端</h3>
+                            <h3 className="text-sm font-bold text-gray-800 dark:text-white">{t('settings.mcp.title', 'MCP 客户端')}</h3>
                             <button className="text-xs text-[#07c160] hover:underline" onClick={() => setMcpShowCreate(!mcpShowCreate)}>
-                                {mcpShowCreate ? '取消' : '+ 添加'}
+                                {mcpShowCreate ? t('settings.environments.cancel', '取消') : '+ ' + t('settings.environments.add', '添加')}
                             </button>
                         </div>
 
@@ -452,9 +451,9 @@ function Layout() {
                 return (
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                            <h3 className="text-sm font-bold text-gray-800 dark:text-white">环境变量</h3>
+                            <h3 className="text-sm font-bold text-gray-800 dark:text-white">{t('settings.environments.title', '环境变量')}</h3>
                             <button className="text-xs text-[#07c160] hover:underline" onClick={() => setEnvShowAdd(!envShowAdd)}>
-                                {envShowAdd ? '取消' : '+ 添加'}
+                                {envShowAdd ? t('settings.environments.cancel', '取消') : '+ ' + t('settings.environments.add', '添加')}
                             </button>
                         </div>
 
@@ -464,9 +463,9 @@ function Layout() {
                                 <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none font-mono" placeholder="VALUE" type={envNew.secret ? 'password' : 'text'} value={envNew.value} onChange={e => setEnvNew({ ...envNew, value: e.target.value })} />
                                 <label className="flex items-center gap-2 text-xs text-gray-500">
                                     <input type="checkbox" checked={envNew.secret} onChange={e => setEnvNew({ ...envNew, secret: e.target.checked })} className="rounded" />
-                                    密钥 (界面脱敏)
+                                    {t('settings.environments.secret_label', '密钥 (界面脱敏)')}
                                 </label>
-                                <button className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md" onClick={envAdd} disabled={!envNew.key}>保存</button>
+                                <button className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md" onClick={envAdd} disabled={!envNew.key}>{t('settings.environments.save', '保存')}</button>
                             </div>
                         )}
 
@@ -493,7 +492,7 @@ function Layout() {
                                 </div>
                             ))}
                             {envVars.length === 0 && !envShowAdd && (
-                                <p className="text-sm text-gray-400 text-center py-6">暂无环境变量</p>
+                                <p className="text-sm text-gray-400 text-center py-6">{t('settings.environments.empty', '暂无环境变量')}</p>
                             )}
                         </div>
                     </div>
@@ -502,7 +501,7 @@ function Layout() {
             case 'about':
                 return (
                     <div className="space-y-4">
-                        <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-4">关于</h3>
+                        <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-4">{t('settings.about.title', '关于')}</h3>
                         <div className="p-5 rounded-xl bg-white dark:bg-[#2e2e2e] space-y-3 text-sm text-gray-600 dark:text-gray-300">
                             <div className="flex items-center gap-3 mb-2">
                                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center">
@@ -510,12 +509,12 @@ function Layout() {
                                 </div>
                                 <div>
                                     <p className="font-semibold text-gray-800 dark:text-white">Helix</p>
-                                    <p className="text-xs text-gray-400">AI 驱动的智能体平台</p>
+                                    <p className="text-xs text-gray-400">{t('settings.about.desc', 'AI 驱动的智能体平台')}</p>
                                 </div>
                             </div>
                             <div className="border-t border-black/5 dark:border-white/5 pt-3 space-y-1.5 text-xs">
-                                <div className="flex justify-between"><span className="text-gray-400">版本</span><span>0.3.0</span></div>
-                                <div className="flex justify-between"><span className="text-gray-400">技术栈</span><span>Tauri + React + Rust</span></div>
+                                <div className="flex justify-between"><span className="text-gray-400">{t('settings.about.version', '版本')}</span><span>0.3.0</span></div>
+                                <div className="flex justify-between"><span className="text-gray-400">{t('settings.about.stack', '技术栈')}</span><span>Tauri + React + Rust</span></div>
                             </div>
                         </div>
                     </div>
@@ -595,13 +594,7 @@ function Layout() {
                                 onClick={() => { setShowSettings(true); setShowMoreMenu(false); }}
                                 className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-[#f5f5f5] dark:hover:bg-[#404040] flex items-center gap-3"
                             >
-                                <SettingsIcon size={16} className="text-gray-400" />设置
-                            </button>
-                            <button
-                                onClick={() => { setShowSettings(true); setSettingsSection('about'); setShowMoreMenu(false); }}
-                                className="w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-[#f5f5f5] dark:hover:bg-[#404040] flex items-center gap-3"
-                            >
-                                <Info size={16} className="text-gray-400" />关于 Helix
+                                <SettingsIcon size={16} className="text-gray-400" />{t('nav.settings', '设置')}
                             </button>
                         </div>
                     )}
@@ -620,11 +613,17 @@ function Layout() {
                     <div className="bg-[#f5f5f5] dark:bg-[#1e1e1e] rounded-xl shadow-2xl w-[780px] h-[540px] flex overflow-hidden">
                         {/* Settings sidebar */}
                         <div className="w-[170px] shrink-0 bg-[#f0f0f0] dark:bg-[#252525] rounded-l-xl py-4 px-2 overflow-y-auto">
-                            <div className="flex items-center justify-between px-2 mb-3">
-                                <span className="text-xs font-medium text-gray-400">设置</span>
-                                <button onClick={() => setShowSettings(false)} className="p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10">
-                                    <X size={14} className="text-gray-400" />
-                                </button>
+                            <div className="flex items-center px-2 mb-3 relative">
+                                <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => setShowSettings(false)}>
+                                    <div className="w-3 h-3 rounded-full bg-[#ff5f56] flex items-center justify-center">
+                                        <X size={8} className="text-black/50 opacity-0 group-hover:opacity-100" />
+                                    </div>
+                                    <div className="w-3 h-3 rounded-full bg-[#ffbd2e] flex items-center justify-center">
+                                    </div>
+                                    <div className="w-3 h-3 rounded-full bg-[#27c93f] flex items-center justify-center">
+                                    </div>
+                                </div>
+                                <span className="text-xs font-medium text-gray-400 absolute left-1/2 -translate-x-1/2 pointer-events-none">{t('settings.title', '设置')}</span>
                             </div>
                             {Object.entries(menuGroups).map(([groupLabel, items]) => (
                                 <div key={groupLabel} className="mb-2">

@@ -161,12 +161,7 @@ impl<S> Layer<S> for TauriLogBridgeLayer
 where
     S: Subscriber,
 {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        // [FIX] 如果调试控制台未启用，直接跳过所有处理，避免性能损耗
-        if !LOG_BRIDGE_ENABLED.load(Ordering::Relaxed) {
-            return;
-        }
-
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
         // Extract metadata
         let metadata = event.metadata();
         let level = match *metadata.level() {
@@ -209,8 +204,10 @@ where
         }
 
         // Emit to frontend
-        if let Some(handle) = APP_HANDLE.get() {
-            let _ = handle.emit("log-event", entry);
+        if LOG_BRIDGE_ENABLED.load(Ordering::Relaxed) {
+            if let Some(handle) = APP_HANDLE.get() {
+                let _ = handle.emit("log-event", entry);
+            }
         }
     }
 }

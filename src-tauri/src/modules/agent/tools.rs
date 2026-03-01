@@ -862,19 +862,35 @@ async fn search_baidu(client: &reqwest::Client, query: &str, num: usize) -> Resu
 async fn tool_memory_store(args: &Value) -> Result<String, String> {
     let key = args["key"].as_str().ok_or("Missing 'key'")?;
     let value = args["value"].as_str().ok_or("Missing 'value'")?;
-    super::memory::memory_store_entry(key.to_string(), value.to_string(), None, None).await?;
+    let session_id = super::core::SESSION_ACCOUNT_ID
+        .try_with(|id| id.clone())
+        .unwrap_or_else(|_| "default".to_string());
+    
+    // Store with session_id as source for strict isolation
+    super::memory::memory_store_entry(key.to_string(), value.to_string(), Some(session_id), None).await?;
     Ok(format!("✅ Stored under key '{}'", key))
 }
 
 // ---- Memory Recall ----
 async fn tool_memory_recall(args: &Value) -> Result<String, String> {
     let query = args["query"].as_str().ok_or("Missing 'query'")?;
-    let results = super::memory::memory_search(query.to_string(), Some(10)).await?;
-    if results.is_empty() {
-        Ok("No matching memories found.".to_string())
+    let session_id = super::core::SESSION_ACCOUNT_ID
+        .try_with(|id| id.clone())
+        .unwrap_or_else(|_| "default".to_string());
+
+    let results = super::memory::memory_search(query.to_string(), Some(20)).await?;
+    
+    // Strict isolation: only return memory from this exact conversation
+    let session_results: Vec<_> = results.into_iter()
+        .filter(|r| r.entry.source == session_id)
+        .take(10)
+        .collect();
+
+    if session_results.is_empty() {
+        Ok("No matching memories found for this conversation.".to_string())
     } else {
-        let mut output = format!("Found {} memories:\n\n", results.len());
-        for r in &results {
+        let mut output = format!("Found {} memories in this conversation:\n\n", session_results.len());
+        for r in &session_results {
             output.push_str(&format!("**{}**: {}\n\n", r.entry.key, r.entry.content));
         }
         Ok(output)

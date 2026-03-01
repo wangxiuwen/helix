@@ -456,14 +456,16 @@ pub async fn agent_process_message(
     let config = load_app_config().map_err(|e| format!("配置加载失败: {}", e))?;
     let ai = &config.ai_config;
 
-    if ai.api_key.is_empty() {
+    if ai.api_key.is_empty() && ai.provider != "ollama" && ai.provider != "custom" {
         return Err("API Key 未设置，请在设置中配置".to_string());
     }
 
     // 3. Build agents-sdk model with configurable base URL
     // SDK api_url is the FULL endpoint (e.g. .../v1/chat/completions), not just base
     let full_api_url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
-    let oai_config = OpenAiConfig::new(&ai.api_key, &ai.model)
+    
+    let api_key = if ai.api_key.is_empty() { "dummy" } else { &ai.api_key };
+    let oai_config = OpenAiConfig::new(api_key, &ai.model)
         .with_api_url(Some(full_api_url));
     let model = Arc::new(
         OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init failed: {}", e))?

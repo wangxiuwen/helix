@@ -185,6 +185,7 @@ interface helixState {
     createChatSession: (title?: string, workspace?: string) => string;
     deleteChatSession: (id: string) => void;
     setActiveChatId: (id: string | null) => void;
+    updateChatSession: (id: string, updates: Partial<ChatSession>) => void;
     sendMessage: (sessionId: string, content: string, images?: string[]) => Promise<void>;
     confirmToolExecution: (sessionId: string, messageId: string) => Promise<void>;
 
@@ -327,18 +328,23 @@ export const useDevOpsStore = create<helixState>()(
                     activeChatId: s.activeChatId === id ? null : s.activeChatId,
                 })),
             setActiveChatId: (id) => set({ activeChatId: id }),
+            updateChatSession: (id, updates) =>
+                set((s) => ({
+                    chatSessions: s.chatSessions.map((cs) => (cs.id === id ? { ...cs, ...updates } : cs)),
+                })),
 
             sendMessage: async (sessionId, content, images) => {
                 const state = get();
                 const session = state.chatSessions.find((s) => s.id === sessionId);
                 if (!session) return;
 
+                const newUserMsgId = generateId();
                 // Add user message
                 set((s) => ({
                     chatSessions: s.chatSessions.map((cs) =>
                         cs.id === sessionId ? {
                             ...cs,
-                            messages: [...cs.messages, { id: generateId(), role: 'user' as const, content, images, timestamp: new Date().toISOString() }],
+                            messages: [...cs.messages, { id: newUserMsgId, role: 'user' as const, content, images, timestamp: new Date().toISOString() }],
                             updatedAt: new Date().toISOString(),
                         } : cs
                     ),
@@ -349,27 +355,37 @@ export const useDevOpsStore = create<helixState>()(
                     const { invoke } = await import('@tauri-apps/api/core');
                     const accountId = `chat:${sessionId}`;
 
-                    // Ensure backend config is up-to-date with current provider/model
-                    const active = get().aiProviders.find(p => p.enabled);
-                    const currentModel = active?.defaultModel || active?.models?.[0] || '';
-                    if (active) {
+                    // Ensure backend config is up-to-date with session's provider/model
+                    const activeP = session.provider
+                        ? get().aiProviders.find(p => p.id === session.provider)
+                        : get().aiProviders.find(p => p.enabled);
+                    const currentModel = session.model || activeP?.defaultModel || activeP?.models?.[0] || '';
+                    if (activeP) {
                         await invoke('ai_set_config', {
-                            provider: active.type,
-                            baseUrl: active.baseUrl || '',
-                            apiKey: active.apiKey || '',
+                            provider: activeP.type,
+                            baseUrl: activeP.baseUrl || '',
+                            apiKey: activeP.apiKey || '',
                             model: currentModel,
                         });
                     }
 
                     // If model changed since last message in this session, clear backend history
-                    const sess = get().chatSessions.find(cs => cs.id === sessionId);
-                    if (sess && sess.model && sess.model !== currentModel) {
-                        await invoke('agent_clear_history', { accountId }).catch(() => { });
+                    if (session.messages.length > 0) {
+                        const lastMsg = session.messages[session.messages.length - 1];
+                        if (lastMsg.model && lastMsg.model !== currentModel) {
+                            await invoke('agent_clear_history', { accountId }).catch(() => { });
+                        }
                     }
-                    // Track current model on session
+
+                    // Track current model on user message
                     set((s) => ({
                         chatSessions: s.chatSessions.map((cs) =>
-                            cs.id === sessionId ? { ...cs, model: currentModel } : cs
+                            cs.id === sessionId ? {
+                                ...cs,
+                                provider: activeP?.id,
+                                model: currentModel,
+                                messages: cs.messages.map(m => m.id === newUserMsgId ? { ...m, model: currentModel } : m)
+                            } : cs
                         ),
                     }));
 

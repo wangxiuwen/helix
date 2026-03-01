@@ -5,7 +5,6 @@ import CronJobs from './pages/CronJobs';
 import Skills from './pages/Skills';
 import MCP from './pages/MCP';
 import Logs from './pages/Logs';
-import Settings from './pages/Settings';
 import AIChat from './pages/AIChat';
 import ThemeManager from './components/common/ThemeManager';
 import { useEffect } from 'react';
@@ -36,10 +35,6 @@ const router = createBrowserRouter([
       {
         path: 'logs',
         element: <Logs />,
-      },
-      {
-        path: 'settings',
-        element: <Settings />,
       },
     ],
   },
