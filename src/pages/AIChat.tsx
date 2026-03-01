@@ -258,8 +258,9 @@ function AIChat() {
             <div
                 className="shrink-0 bg-[#f7f7f7] dark:bg-[#252525] flex flex-col border-r border-black/5 dark:border-white/5"
                 style={{ width: sidebarWidth }}
+                data-tauri-drag-region
             >
-                <div className="px-3 pt-3 pb-2 flex items-center gap-2">
+                <div className="px-3 pt-3 pb-2 flex items-center gap-2" data-tauri-drag-region style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
                     <div className="flex-1 relative">
                         <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                         <input
@@ -333,16 +334,24 @@ function AIChat() {
             {/* ── Chat area ────────────────────────────────────────── */}
             <div className={`flex-1 flex flex-col min-w-0 bg-[#ededed] dark:bg-[#1a1a1a] ${isDragging ? 'select-none' : ''}`}>
                 {!activeSession ? (
-                    <div className="flex-1 flex items-center justify-center">
-                        <div className="text-center">
-                            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center mx-auto mb-4 shadow-lg">
-                                <Sparkles size={30} className="text-white" />
+                    <div
+                        className="flex-1 flex flex-col"
+                        data-tauri-drag-region
+                        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+                    >
+                        {/* Top drag bar */}
+                        <div className="h-12 shrink-0" data-tauri-drag-region style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+                        <div className="flex-1 flex items-center justify-center" style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as React.CSSProperties}>
+                            <div className="text-center">
+                                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center mx-auto mb-4 shadow-lg">
+                                    <Sparkles size={30} className="text-white" />
+                                </div>
+                                <h2 className="text-base font-medium text-gray-600 dark:text-gray-400 mb-1">{t('chat.welcome', 'Helix 智能助手')}</h2>
+                                <p className="text-xs text-gray-400">{t('chat.welcome_desc', '选择一个对话或开始新对话')}</p>
+                                <button className="mt-5 px-5 py-2 text-sm bg-[#07c160] hover:bg-[#06ad56] text-white rounded-full transition-colors shadow-sm" onClick={() => createChatSession()}>
+                                    <Plus size={13} className="inline mr-1.5" />{t('chat.start', '开始对话')}
+                                </button>
                             </div>
-                            <h2 className="text-base font-medium text-gray-600 dark:text-gray-400 mb-1">{t('chat.welcome', 'Helix 智能助手')}</h2>
-                            <p className="text-xs text-gray-400">{t('chat.welcome_desc', '选择一个对话或开始新对话')}</p>
-                            <button className="mt-5 px-5 py-2 text-sm bg-[#07c160] hover:bg-[#06ad56] text-white rounded-full transition-colors shadow-sm" onClick={() => createChatSession()}>
-                                <Plus size={13} className="inline mr-1.5" />{t('chat.start', '开始对话')}
-                            </button>
                         </div>
                     </div>
                 ) : (

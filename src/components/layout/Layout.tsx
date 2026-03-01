@@ -534,7 +534,8 @@ function Layout() {
                 style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
                 data-tauri-drag-region
             >
-                <div className="w-full h-[52px] shrink-0" />
+                {/* Traffic light spacer - pointer-events-none so native buttons work */}
+                <div className="w-full h-[52px] shrink-0" style={{ pointerEvents: 'none' } as React.CSSProperties} />
 
                 <div
                     className="w-9 h-9 rounded-lg bg-white dark:bg-[#404040] flex items-center justify-center mb-4 cursor-pointer shadow-sm"
