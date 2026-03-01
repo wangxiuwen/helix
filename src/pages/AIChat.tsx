@@ -398,6 +398,18 @@ function AIChat() {
                             style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
                             data-tauri-drag-region
                         >
+                            <div
+                                className="w-7 h-7 rounded-sm overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity bg-gradient-to-br from-[#07c160] to-[#05a050] mr-3"
+                                onClick={() => setShowAvatarPicker(true)}
+                                title={t('chat.change_avatar', '更换助手头像')}
+                                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                            >
+                                {activeSession.agentAvatarUrl ? (
+                                    <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-full h-full object-cover" />
+                                ) : (
+                                    <Bot size={16} className="text-white" />
+                                )}
+                            </div>
                             <h3 className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate pointer-events-none">{activeSession.title}</h3>
                             {activeSession.workspace && (
                                 <span className="text-[11px] text-gray-400 ml-2 flex items-center gap-1 pointer-events-none">
@@ -429,7 +441,7 @@ function AIChat() {
                                         {msg.role === 'user'
                                             ? <User size={15} className="text-gray-700" />
                                             : activeSession.agentAvatarUrl
-                                                ? <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-full h-full object-cover" />
+                                                ? <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
                                                 : <Bot size={15} className="text-white" />
                                         }
                                     </div>
@@ -546,8 +558,12 @@ function AIChat() {
                             ))}
                             {isSessionLoading && (
                                 <div className="flex gap-2.5">
-                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mt-0.5">
-                                        <Bot size={15} className="text-white" />
+                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mt-0.5 overflow-hidden shadow-sm">
+                                        {activeSession.agentAvatarUrl ? (
+                                            <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
+                                        ) : (
+                                            <Bot size={15} className="text-white" />
+                                        )}
                                     </div>
                                     <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[65%]">
                                         {agentStatus.length > 0 ? (
