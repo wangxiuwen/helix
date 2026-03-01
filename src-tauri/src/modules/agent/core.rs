@@ -148,7 +148,9 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
          - `chat_send_file` — Send a file as a downloadable card in the chat\n\n\
          ### Utilities\n\
          - `get_current_time` — Get the current system time with timezone\n\
-         - `desktop_screenshot` — Capture a screenshot of the desktop"
+         - `desktop_screenshot` — Capture a screenshot of the desktop\n\n\
+         ### Browser Automation\n\
+         - `browser_use` — Control a browser: launch, goto(url), click(ref_id), fill(ref_id, text), snapshot, screenshot, stop"
             .to_string(),
     );
 

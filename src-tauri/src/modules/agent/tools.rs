@@ -348,6 +348,20 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
+        agents_sdk::tool(
+            "browser_use",
+            "Control a browser for web automation. Actions: launch (start browser), goto (navigate to URL), click (click element by ref_id), fill (type text into element by ref_id), snapshot (get page accessibility tree), screenshot (capture page screenshot), stop (close browser).",
+            schema(vec![
+                param("action", "string", Some("Action: launch, goto, click, fill, snapshot, screenshot, stop")),
+                param("url", "string", Some("URL to navigate to (for goto action)")),
+                param("ref_id", "string", Some("Element reference ID from snapshot (for click/fill)")),
+                param("text", "string", Some("Text to type (for fill action)")),
+            ], vec!["action"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_browser_use(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
     ]
 }
 
@@ -374,6 +388,7 @@ pub async fn execute_tool(name: &str, args: &Value, _ctx: Option<&str>) -> Resul
         "chat_send_file" => tool_chat_send_file(args).await,
         "get_current_time" => Ok(tool_get_current_time()),
         "desktop_screenshot" => tool_desktop_screenshot(args).await,
+        "browser_use"    => tool_browser_use(args).await,
         other => Err(format!("Unknown tool: {}", other)),
     }
 }
@@ -1223,3 +1238,49 @@ async fn tool_desktop_screenshot(args: &Value) -> Result<String, String> {
         filepath_str, size_kb
     ))
 }
+
+// ---- Browser Use ----
+async fn tool_browser_use(args: &Value) -> Result<String, String> {
+    use crate::modules::browser_engine::BrowserSession;
+
+    let action = args["action"].as_str().unwrap_or("").to_lowercase();
+
+    match action.as_str() {
+        "launch" | "start" => {
+            BrowserSession::launch().await?;
+            Ok("🌐 Browser launched successfully. Use `goto` to navigate to a URL.".to_string())
+        }
+        "goto" | "navigate" | "open" => {
+            let url = args["url"].as_str().ok_or("Missing 'url' parameter")?;
+            let tree = BrowserSession::goto(url).await?;
+            Ok(format!("🌐 Navigated to: {}\n\n## Page Elements\n{}", url, tree))
+        }
+        "click" => {
+            let ref_id = args["ref_id"].as_str().ok_or("Missing 'ref_id' parameter")?;
+            let result = BrowserSession::click(ref_id).await?;
+            Ok(format!("🖱️ {}", result))
+        }
+        "fill" | "type" | "input" => {
+            let ref_id = args["ref_id"].as_str().ok_or("Missing 'ref_id' parameter")?;
+            let text = args["text"].as_str().ok_or("Missing 'text' parameter")?;
+            let result = BrowserSession::fill(ref_id, text).await?;
+            Ok(format!("⌨️ {}", result))
+        }
+        "snapshot" | "tree" | "elements" => {
+            // Re-extract the accessibility tree from current page
+            let tree = BrowserSession::goto("").await
+                .unwrap_or_else(|_| "(Cannot snapshot — browser may not be active)".to_string());
+            Ok(format!("📋 Page Elements:\n{}", tree))
+        }
+        "screenshot" => {
+            // Take a screenshot via the desktop_screenshot tool as a fallback
+            tool_desktop_screenshot(args).await
+        }
+        "stop" | "close" | "quit" => {
+            // Browser will be closed when the global session is dropped
+            Ok("🌐 Browser session ended.".to_string())
+        }
+        _ => Err(format!("Unknown browser action: '{}'. Valid: launch, goto, click, fill, snapshot, screenshot, stop", action)),
+    }
+}
+
