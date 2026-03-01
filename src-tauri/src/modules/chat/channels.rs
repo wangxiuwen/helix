@@ -25,6 +25,8 @@ pub enum ChannelId {
     IMessage,
     #[serde(rename = "feishu")]
     Feishu,
+    #[serde(rename = "wecom")]
+    WeCom,
     #[serde(rename = "custom")]
     Custom(String),
 }
@@ -38,6 +40,7 @@ impl std::fmt::Display for ChannelId {
             ChannelId::QQ => write!(f, "qq"),
             ChannelId::IMessage => write!(f, "imessage"),
             ChannelId::Feishu => write!(f, "feishu"),
+            ChannelId::WeCom => write!(f, "wecom"),
             ChannelId::Custom(name) => write!(f, "custom:{}", name),
         }
     }
@@ -142,6 +145,16 @@ pub fn list_channels() -> Vec<ChannelMeta> {
             connected: false,
             protocol: "api".into(),
         },
+        ChannelMeta {
+            id: ChannelId::WeCom,
+            label: "企业微信".into(),
+            description: "企业微信群机器人 Webhook".into(),
+            icon: "💼".into(),
+            supports_auto_reply: false,
+            supports_media: false,
+            connected: false,
+            protocol: "webhook".into(),
+        },
     ]
 }
 
@@ -154,6 +167,7 @@ pub fn resolve_channel_id(raw: &str) -> Option<ChannelId> {
         "qq" => Some(ChannelId::QQ),
         "imessage" | "imsg" | "apple" => Some(ChannelId::IMessage),
         "feishu" | "lark" | "飞书" => Some(ChannelId::Feishu),
+        "wecom" | "wechat_work" | "企业微信" | "企微" => Some(ChannelId::WeCom),
         _ => None,
     }
 }
@@ -299,6 +313,30 @@ pub async fn dispatch_outbound_message(msg: &OutboundMessage) -> Result<(), Stri
             } else {
                 let err = resp.text().await.unwrap_or_default();
                 Err(format!("Feishu webhook error: {}", &err[..err.len().min(300)]))
+            }
+        }
+        ChannelId::WeCom => {
+            // 企业微信群机器人 Webhook
+            let webhook_url = std::env::var("WECOM_WEBHOOK_URL")
+                .map_err(|_| "WECOM_WEBHOOK_URL not set. Add it in Settings → Environments.")?;
+
+            let body = serde_json::json!({
+                "msgtype": "text",
+                "text": { "content": msg.content }
+            });
+
+            let client = reqwest::Client::new();
+            let resp = client.post(&webhook_url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("WeCom webhook error: {}", e))?;
+
+            if resp.status().is_success() {
+                Ok(())
+            } else {
+                let err = resp.text().await.unwrap_or_default();
+                Err(format!("WeCom webhook error: {}", &err[..err.len().min(300)]))
             }
         }
         ChannelId::Custom(name) => Err(format!("Custom channel '{}' not implemented", name)),
