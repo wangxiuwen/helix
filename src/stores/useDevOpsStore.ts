@@ -270,7 +270,7 @@ export const useDevOpsStore = create<helixState>()(
             checkServerStatus: async (id) => {
                 const server = get().servers.find((s) => s.id === id);
                 if (!server) return;
-                set((s) => ({ loading: { ...s.loading, [`server-${id}`]: true } }));
+                set((s) => ({ loading: { ...(s.loading || {}), [`server-${id}`]: true } }));
                 try {
                     const url = `http://${server.host}${server.port ? `:${server.port}` : ''}`;
                     const controller = new AbortController();
@@ -359,7 +359,7 @@ export const useDevOpsStore = create<helixState>()(
                             updatedAt: new Date().toISOString(),
                         } : cs
                     ),
-                    loading: { ...s.loading, [`chat-${sessionId}`]: true },
+                    loading: { ...(s.loading || {}), [`chat-${sessionId}`]: true },
                 }));
 
                 try {
@@ -444,7 +444,7 @@ export const useDevOpsStore = create<helixState>()(
                         };
                     });
                 } finally {
-                    set((s) => ({ loading: { ...s.loading, [`chat-${sessionId}`]: false } }));
+                    set((s) => ({ loading: { ...(s.loading || {}), [`chat-${sessionId}`]: false } }));
                 }
             },
 
@@ -596,6 +596,8 @@ export const useDevOpsStore = create<helixState>()(
                         );
                     }
                 }
+                // Ensure loading is initialized properly after hydration
+                if (!persistedState.loading) persistedState.loading = {};
                 return persistedState;
             },
             partialize: (state) => ({
