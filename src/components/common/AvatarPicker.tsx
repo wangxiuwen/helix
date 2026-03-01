@@ -5,9 +5,9 @@ import { createAvatar } from '@dicebear/core';
 import { micah, notionists, bottts, adventurer, funEmoji, lorelei } from '@dicebear/collection';
 
 const DEFAULT_PRESETS = Array.from({ length: 11 }).map((_, i) => ({
-    id: `preset-notion-${i}`,
-    title: `预设手绘 ${i + 1}`,
-    url: createAvatar(notionists, { seed: `helix-preset-${i}`, size: 128 }).toDataUri()
+    id: `preset-micah-${i}`,
+    title: `预设头像 ${i + 1}`,
+    url: createAvatar(micah, { seed: `helix-preset-${i}`, size: 128 }).toDataUri()
 }));
 
 export const BUILT_IN_AVATARS = [
@@ -50,7 +50,7 @@ export function AvatarPicker({ isOpen, onClose, onSelect, currentAvatarUrl, titl
 
     // Generator State
     const [genSeed, setGenSeed] = useState<string>('');
-    const [genStyleIdx, setGenStyleIdx] = useState<number>(0);
+    const [genStyleIdx, setGenStyleIdx] = useState<number>(2);
     const [genBgIdx, setGenBgIdx] = useState<number>(0);
 
     // Upload State

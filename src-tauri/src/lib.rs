@@ -1,12 +1,12 @@
+mod commands;
+pub mod error;
 mod models;
 mod modules;
-mod commands;
 mod utils;
-pub mod error;
 
-use tauri::Manager;
 use modules::logger;
-use tracing::{info, warn, error};
+use tauri::Manager;
+use tracing::{error, info, warn};
 
 #[derive(Clone, Copy)]
 struct AppRuntimeFlags {
@@ -15,7 +15,12 @@ struct AppRuntimeFlags {
 
 fn env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -79,7 +84,10 @@ fn increase_nofile_limit() {
         };
 
         if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 {
-            info!("Current open file limit: soft={}, hard={}", rl.rlim_cur, rl.rlim_max);
+            info!(
+                "Current open file limit: soft={}, hard={}",
+                rl.rlim_cur, rl.rlim_max
+            );
 
             let target = 4096.min(rl.rlim_max);
             if rl.rlim_cur < target {
@@ -135,13 +143,13 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = app.get_webview_window("main")
-                .map(|window| {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    #[cfg(target_os = "macos")]
-                    app.set_activation_policy(tauri::ActivationPolicy::Regular).unwrap_or(());
-                });
+            let _ = app.get_webview_window("main").map(|window| {
+                let _ = window.show();
+                let _ = window.set_focus();
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                    .unwrap_or(());
+            });
         }))
         .manage(commands::cloudflared::CloudflaredState::new())
         .manage(AppRuntimeFlags { tray_enabled })
@@ -287,8 +295,8 @@ pub fn run() {
             // K8s / Aliyun config commands
             commands::get_kube_info,
             commands::get_aliyun_info,
-
             // AI Chat commands
+            modules::ai_chat::team_chat_fetch,
             modules::ai_chat::ai_chat_send,
             modules::ai_chat::ai_get_config,
             modules::ai_chat::ai_set_config,
@@ -409,6 +417,9 @@ pub fn run() {
             modules::workspace::workspace_write_file,
             modules::workspace::workspace_delete_file,
             modules::workspace::workspace_get_dir,
+            modules::workspace::workspace_open_dir,
+            modules::workspace::workspace_list_session_files,
+            modules::workspace::workspace_read_session_file,
             // Environments
             modules::environments::envs_list,
             modules::environments::envs_set,
@@ -419,28 +430,27 @@ pub fn run() {
             modules::mcp::mcp_toggle,
             modules::mcp::mcp_delete,
             modules::mcp::mcp_update,
-
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            match event {
-                tauri::RunEvent::ExitRequested { api, .. } => {
-                    api.prevent_exit();
-                }
-                tauri::RunEvent::Exit => {
-                    tracing::info!("Application exiting, cleaning up background tasks...");
-                }
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::Reopen { .. } => {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.unminimize();
-                        let _ = window.set_focus();
-                        app_handle.set_activation_policy(tauri::ActivationPolicy::Regular).unwrap_or(());
-                    }
-                }
-                _ => {}
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                api.prevent_exit();
             }
+            tauri::RunEvent::Exit => {
+                tracing::info!("Application exiting, cleaning up background tasks...");
+            }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                    app_handle
+                        .set_activation_policy(tauri::ActivationPolicy::Regular)
+                        .unwrap_or(());
+                }
+            }
+            _ => {}
         });
 }
