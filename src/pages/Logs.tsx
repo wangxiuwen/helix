@@ -18,11 +18,17 @@ function Logs() {
     const bottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        invoke<LogEntry[]>('logs_get_all').then(setLogs).catch(console.error);
+        invoke('enable_debug_console').then(() => {
+            invoke<LogEntry[]>('get_debug_console_logs').then(setLogs).catch(console.error);
+        });
+
         const unlisten = listen<LogEntry>('log-event', (event) => {
             setLogs(prev => [...prev, event.payload]);
         });
-        return () => { unlisten.then(fn => fn()); };
+        return () => {
+            unlisten.then(fn => fn());
+            invoke('disable_debug_console').catch(console.error);
+        };
     }, []);
 
     useEffect(() => {
@@ -31,7 +37,7 @@ function Logs() {
 
     const handleClear = async () => {
         try {
-            await invoke('logs_clear');
+            await invoke('clear_debug_console_logs');
             setLogs([]);
         } catch (e) { console.error(e); }
     };

@@ -125,7 +125,8 @@ export default function Skills() {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [newSkillName, setNewSkillName] = useState('');
     const [importModalOpen, setImportModalOpen] = useState(false);
-    const [importUrl, setImportUrl] = useState('');
+    const [importPrefix, setImportPrefix] = useState('https://skills.sh/');
+    const [importPath, setImportPath] = useState('');
     const [importUrlError, setImportUrlError] = useState('');
     const [importing, setImporting] = useState(false);
 
@@ -195,26 +196,18 @@ export default function Skills() {
         } catch (e: unknown) { setError(String(e)); }
     };
 
-    const isSupportedUrl = (url: string) => SUPPORTED_URL_PREFIXES.some(p => url.startsWith(p));
-
-    const handleImportUrlChange = (val: string) => {
-        setImportUrl(val);
-        const trimmed = val.trim();
-        setImportUrlError(trimmed && !isSupportedUrl(trimmed)
-            ? '不支持该来源，请使用 skills.sh / clawhub.ai / skillsmp.com / github.com' : '');
-    };
-
     const handleHubInstall = async () => {
         if (importing) return;
-        const trimmed = importUrl.trim();
-        if (!trimmed || !isSupportedUrl(trimmed)) return;
+        const fullUrl = importPrefix + importPath;
+        const trimmed = fullUrl.trim();
+        if (!importPath.trim()) return;
         setImporting(true);
         try {
             const result = await invoke<{ installed: boolean; name: string }>('skills_hub_install', { bundleUrl: trimmed });
             if (result?.installed) {
                 setToast(`技能 "${result.name}" 安装成功`);
                 setImportModalOpen(false);
-                setImportUrl('');
+                setImportPath('');
                 setImportUrlError('');
                 setTab('local');
                 await loadSkills();
@@ -421,7 +414,17 @@ export default function Skills() {
                                 <p className="text-sm text-gray-600 dark:text-gray-300 mb-6 p-4 bg-gray-50 dark:bg-[#2e2e2e] rounded-xl leading-relaxed">{hubSelected.readme}</p>
 
                                 <div className="flex items-center gap-3">
-                                    <button onClick={() => { setImportUrl(hubSelected.url); setImportModalOpen(true); }}
+                                    <button onClick={() => {
+                                        const url = hubSelected.url || '';
+                                        const matchedPrefix = SUPPORTED_URL_PREFIXES.find(p => url.startsWith(p));
+                                        if (matchedPrefix) {
+                                            setImportPrefix(matchedPrefix);
+                                            setImportPath(url.slice(matchedPrefix.length));
+                                        } else {
+                                            setImportPath(url);
+                                        }
+                                        setImportModalOpen(true);
+                                    }}
                                         className="flex items-center gap-2 px-5 py-2.5 bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg text-sm font-medium transition-colors">
                                         <Download size={15} />安装技能
                                     </button>
@@ -537,7 +540,7 @@ export default function Skills() {
                     <div className="bg-white dark:bg-[#2e2e2e] rounded-xl shadow-xl w-[520px] p-6">
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2"><Download className="w-4 h-4 text-[#07c160]" />导入技能</h3>
-                            <button onClick={() => { if (!importing) { setImportModalOpen(false); setImportUrl(''); setImportUrlError(''); } }} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10"><X size={16} className="text-gray-400" /></button>
+                            <button onClick={() => { if (!importing) { setImportModalOpen(false); setImportPath(''); setImportUrlError(''); } }} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10"><X size={16} className="text-gray-400" /></button>
                         </div>
                         <div className="mb-4 p-3 rounded-lg bg-[#f7f7f7] dark:bg-[#3a3a3a] text-xs text-gray-500 dark:text-gray-400">
                             <p className="font-medium text-gray-600 dark:text-gray-300 mb-1.5">支持的 URL 来源：</p>
@@ -550,14 +553,27 @@ export default function Skills() {
                                 <li>• https://github.com/anthropics/skills/tree/main/skills/skill-creator</li>
                             </ul>
                         </div>
-                        <input type="text" value={importUrl} onChange={e => handleImportUrlChange(e.target.value)} placeholder="输入技能 URL..." disabled={importing}
-                            className="w-full px-3 py-2.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-lg border border-gray-200 dark:border-gray-700 outline-none text-gray-700 dark:text-gray-200 mb-2 focus:border-[#07c160] transition-colors"
-                            onKeyDown={e => e.key === 'Enter' && handleHubInstall()} />
+                        <div className="flex gap-2 mb-2">
+                            <select
+                                value={importPrefix}
+                                onChange={e => setImportPrefix(e.target.value)}
+                                disabled={importing}
+                                className="w-[180px] shrink-0 px-3 py-2.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-lg border border-gray-200 dark:border-gray-700 outline-none text-gray-700 dark:text-gray-200 focus:border-[#07c160] transition-colors"
+                            >
+                                <option value="https://skills.sh/">skills.sh/</option>
+                                <option value="https://clawhub.ai/">clawhub.ai/</option>
+                                <option value="https://skillsmp.com/">skillsmp.com/</option>
+                                <option value="https://github.com/">github.com/</option>
+                            </select>
+                            <input type="text" value={importPath} onChange={e => { setImportPath(e.target.value); setImportUrlError(''); }} placeholder="输入技能路径或仓库地址" disabled={importing}
+                                className="flex-1 min-w-0 px-3 py-2.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-lg border border-gray-200 dark:border-gray-700 outline-none text-gray-700 dark:text-gray-200 focus:border-[#07c160] transition-colors"
+                                onKeyDown={e => e.key === 'Enter' && handleHubInstall()} />
+                        </div>
                         {importUrlError && <p className="text-xs text-red-500 mb-2 flex items-center gap-1"><AlertCircle size={12} />{importUrlError}</p>}
                         {importing && <p className="text-xs text-gray-400 mb-2 flex items-center gap-1"><Loader2 size={12} className="animate-spin" />正在导入...</p>}
                         <div className="flex justify-end gap-2 mt-3">
-                            <button onClick={() => { if (!importing) { setImportModalOpen(false); setImportUrl(''); setImportUrlError(''); } }} disabled={importing} className="px-4 py-2 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-40">取消</button>
-                            <button onClick={handleHubInstall} disabled={importing || !importUrl.trim() || !!importUrlError}
+                            <button onClick={() => { if (!importing) { setImportModalOpen(false); setImportPath(''); setImportUrlError(''); } }} disabled={importing} className="px-4 py-2 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-40">取消</button>
+                            <button onClick={handleHubInstall} disabled={importing || !importPath.trim() || !!importUrlError}
                                 className="px-4 py-2 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg disabled:opacity-40 flex items-center gap-1">
                                 {importing && <Loader2 size={12} className="animate-spin" />}导入技能
                             </button>
