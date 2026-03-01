@@ -530,7 +530,7 @@ function Layout() {
 
             {/* Icon Sidebar */}
             <div
-                className="w-16 shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center pb-4 gap-1 border-r border-black/5 dark:border-white/5"
+                className="w-[76px] shrink-0 bg-[#e9e9e9] dark:bg-[#2e2e2e] flex flex-col items-center pb-4 gap-1 border-r border-black/5 dark:border-white/5"
                 style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
                 data-tauri-drag-region
             >
