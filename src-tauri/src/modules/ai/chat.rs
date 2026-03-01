@@ -5,7 +5,7 @@
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::models::config::AiModelConfig;
 use crate::modules::config::{load_app_config, save_app_config};
@@ -16,8 +16,65 @@ use crate::modules::config::{load_app_config, save_app_config};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiMessage {
-    pub role: String,   // "system", "user", "assistant"
+    pub role: String,
     pub content: String,
+}
+
+#[tauri::command]
+pub async fn team_chat_fetch(
+    url: String,
+    method: String,
+    headers: std::collections::HashMap<String, String>,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let mut req = match method.to_uppercase().as_str() {
+        "POST" => client.post(&url),
+        "PUT" => client.put(&url),
+        "DELETE" => client.delete(&url),
+        _ => client.get(&url),
+    };
+
+    let mut hmap = HeaderMap::new();
+    for (k, v) in headers {
+        if let (Ok(name), Ok(val)) = (
+            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+            reqwest::header::HeaderValue::from_str(&v),
+        ) {
+            hmap.insert(name, val);
+        }
+    }
+
+    // Default json
+    if !hmap.contains_key(CONTENT_TYPE) {
+        hmap.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    }
+    req = req.headers(hmap);
+
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Fetch error: {}", e))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Read error: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("HTTP {} : {}", status, text));
+    }
+
+    serde_json::from_str(&text).map_err(|e| format!("Parse error: {}\nBody: {}", e, text))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +121,10 @@ pub async fn chat_complete(
 
     info!(
         "AI request: provider={}, model={}, url={}, messages={}",
-        config.provider, config.model, config.base_url, messages.len()
+        config.provider,
+        config.model,
+        config.base_url,
+        messages.len()
     );
 
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
@@ -86,8 +146,16 @@ pub async fn chat_complete(
     let status = resp.status();
     if !status.is_success() {
         let err_body = resp.text().await.unwrap_or_default();
-        error!("AI API error: status={}, body={}", status, &err_body[..err_body.len().min(500)]);
-        return Err(format!("AI API 返回错误 ({}): {}", status, &err_body[..err_body.len().min(200)]));
+        error!(
+            "AI API error: status={}, body={}",
+            status,
+            &err_body[..err_body.len().min(500)]
+        );
+        return Err(format!(
+            "AI API 返回错误 ({}): {}",
+            status,
+            &err_body[..err_body.len().min(200)]
+        ));
     }
 
     let data: Value = resp
@@ -100,10 +168,7 @@ pub async fn chat_complete(
         .unwrap_or("")
         .to_string();
 
-    let model = data["model"]
-        .as_str()
-        .unwrap_or(&config.model)
-        .to_string();
+    let model = data["model"].as_str().unwrap_or(&config.model).to_string();
 
     let usage = if !data["usage"].is_null() {
         Some(AiUsage {
@@ -144,8 +209,7 @@ pub async fn chat_complete(
 /// Process a WeChat message and generate an AI reply.
 /// Auto-reply enable/disable is checked by the caller (filehelper per-account).
 pub async fn process_wechat_message(content: &str) -> Result<String, String> {
-    let config = load_app_config()
-        .map_err(|e| format!("读取配置失败: {}", e))?;
+    let config = load_app_config().map_err(|e| format!("读取配置失败: {}", e))?;
     let ai = &config.ai_config;
 
     if ai.api_key.is_empty() {
@@ -174,8 +238,7 @@ pub async fn process_wechat_message(content: &str) -> Result<String, String> {
 /// Send a message to the AI and get a reply (manual test)
 #[tauri::command]
 pub async fn ai_chat_send(content: String) -> Result<Value, String> {
-    let config = load_app_config()
-        .map_err(|e| format!("读取配置失败: {}", e))?;
+    let config = load_app_config().map_err(|e| format!("读取配置失败: {}", e))?;
     let ai = &config.ai_config;
 
     let messages = vec![
@@ -201,8 +264,7 @@ pub async fn ai_chat_send(content: String) -> Result<Value, String> {
 /// Get current AI config
 #[tauri::command]
 pub async fn ai_get_config() -> Result<Value, String> {
-    let config = load_app_config()
-        .map_err(|e| format!("读取配置失败: {}", e))?;
+    let config = load_app_config().map_err(|e| format!("读取配置失败: {}", e))?;
     let ai = &config.ai_config;
 
     Ok(json!({
@@ -228,21 +290,36 @@ pub async fn ai_set_config(
     system_prompt: Option<String>,
     auto_reply: Option<bool>,
 ) -> Result<Value, String> {
-    let mut config = load_app_config()
-        .map_err(|e| format!("读取配置失败: {}", e))?;
+    let mut config = load_app_config().map_err(|e| format!("读取配置失败: {}", e))?;
 
-    if let Some(v) = provider { config.ai_config.provider = v; }
-    if let Some(v) = base_url { config.ai_config.base_url = v; }
-    if let Some(v) = api_key { config.ai_config.api_key = v; }
-    if let Some(v) = model { config.ai_config.model = v; }
-    if let Some(v) = max_tokens { config.ai_config.max_tokens = v; }
-    if let Some(v) = system_prompt { config.ai_config.system_prompt = v; }
-    if let Some(v) = auto_reply { config.ai_config.auto_reply = v; }
+    if let Some(v) = provider {
+        config.ai_config.provider = v;
+    }
+    if let Some(v) = base_url {
+        config.ai_config.base_url = v;
+    }
+    if let Some(v) = api_key {
+        config.ai_config.api_key = v;
+    }
+    if let Some(v) = model {
+        config.ai_config.model = v;
+    }
+    if let Some(v) = max_tokens {
+        config.ai_config.max_tokens = v;
+    }
+    if let Some(v) = system_prompt {
+        config.ai_config.system_prompt = v;
+    }
+    if let Some(v) = auto_reply {
+        config.ai_config.auto_reply = v;
+    }
 
-    save_app_config(&config)
-        .map_err(|e| format!("保存配置失败: {}", e))?;
+    save_app_config(&config).map_err(|e| format!("保存配置失败: {}", e))?;
 
-    info!("AI config updated: provider={}, model={}", config.ai_config.provider, config.ai_config.model);
+    info!(
+        "AI config updated: provider={}, model={}",
+        config.ai_config.provider, config.ai_config.model
+    );
 
     Ok(json!({ "ok": true }))
 }
@@ -250,20 +327,17 @@ pub async fn ai_set_config(
 /// Test AI connection
 #[tauri::command]
 pub async fn ai_test_connection() -> Result<Value, String> {
-    let config = load_app_config()
-        .map_err(|e| format!("读取配置失败: {}", e))?;
+    let config = load_app_config().map_err(|e| format!("读取配置失败: {}", e))?;
     let ai = &config.ai_config;
 
     if ai.api_key.is_empty() {
         return Err("请先设置 API Key".to_string());
     }
 
-    let messages = vec![
-        AiMessage {
-            role: "user".to_string(),
-            content: "你好，请简短回复一个字以确认连接正常。".to_string(),
-        },
-    ];
+    let messages = vec![AiMessage {
+        role: "user".to_string(),
+        content: "你好，请简短回复一个字以确认连接正常。".to_string(),
+    }];
 
     let resp = chat_complete(ai, messages).await?;
 
@@ -367,24 +441,50 @@ pub async fn ai_list_models(base_url: String, api_key: String) -> Result<Value, 
 fn get_builtin_models(base_url: &str) -> Vec<String> {
     if base_url.contains("coding.dashscope") {
         vec![
-            "qwen3.5-plus", "qwen3-coder-next", "qwen3-coder-plus",
-            "qwen3-max-2026-01-23", "MiniMax-M2.5",
-            "glm-5", "glm-4.7", "kimi-k2.5",
+            "qwen3.5-plus",
+            "qwen3-coder-next",
+            "qwen3-coder-plus",
+            "qwen3-max-2026-01-23",
+            "MiniMax-M2.5",
+            "glm-5",
+            "glm-4.7",
+            "kimi-k2.5",
         ]
     } else if base_url.contains("dashscope") {
         vec![
-            "qwen3-max", "qwen3-plus", "qwen3-turbo", "qwen3-coder-plus",
-            "qwen-max", "qwen-max-latest", "qwen-plus", "qwen-plus-latest",
-            "qwen-turbo", "qwen-turbo-latest", "qwen-long",
-            "qwen-coder-plus", "qwen-coder-turbo",
-            "qwq-32b", "qwq-plus", "deepseek-v3", "deepseek-r1",
+            "qwen3-max",
+            "qwen3-plus",
+            "qwen3-turbo",
+            "qwen3-coder-plus",
+            "qwen-max",
+            "qwen-max-latest",
+            "qwen-plus",
+            "qwen-plus-latest",
+            "qwen-turbo",
+            "qwen-turbo-latest",
+            "qwen-long",
+            "qwen-coder-plus",
+            "qwen-coder-turbo",
+            "qwq-32b",
+            "qwq-plus",
+            "deepseek-v3",
+            "deepseek-r1",
         ]
     } else if base_url.contains("openai.com") {
-        vec!["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3", "o3-mini", "o4-mini"]
+        vec![
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+        ]
     } else if base_url.contains("anthropic.com") {
         vec![
-            "claude-opus-4-5", "claude-sonnet-4-5",
-            "claude-sonnet-4-20250514", "claude-haiku-4-5",
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-sonnet-4-20250514",
+            "claude-haiku-4-5",
         ]
     } else {
         return vec![];

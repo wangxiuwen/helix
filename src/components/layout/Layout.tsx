@@ -10,7 +10,7 @@ import {
     MessageSquare, Settings as SettingsIcon,
     Menu, Sparkles, Moon, Sun,
     Activity, Bot, Globe, FolderOpen, KeyRound, Palette, Blocks, Plug, Clock, Trash2, X,
-    Radio, Save, Eye, EyeOff, RefreshCw, Edit2
+    Radio, Save, Eye, EyeOff, RefreshCw, Edit2, Users
 } from 'lucide-react';
 
 type SettingsSection = 'appearance' | 'ai' | 'workspace' | 'environments' | 'about';
@@ -137,6 +137,7 @@ function Layout() {
 
     const navItems = [
         { path: '/', icon: MessageSquare, label: t('nav.chat', '对话'), active: location.pathname === '/' },
+        { path: '/team', icon: Users, label: t('nav.team', '团队'), active: location.pathname === '/team' },
         { path: '/channels', icon: Radio, label: t('nav.channels_hub', '通道'), active: location.pathname === '/channels' },
         { path: '/skills', icon: Blocks, label: t('nav.skills', '技能'), active: location.pathname === '/skills' },
         { path: '/mcp', icon: Plug, label: 'MCP', active: location.pathname === '/mcp' },

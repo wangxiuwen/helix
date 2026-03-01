@@ -6,6 +6,7 @@ import Skills from './pages/Skills';
 import MCP from './pages/MCP';
 import Logs from './pages/Logs';
 import AIChat from './pages/AIChat';
+import TeamChat from './pages/TeamChat';
 import Channels from './pages/Channels';
 import ThemeManager from './components/common/ThemeManager';
 import { useEffect } from 'react';
@@ -20,6 +21,10 @@ const router = createBrowserRouter([
       {
         index: true,
         element: <AIChat />,
+      },
+      {
+        path: 'team',
+        element: <TeamChat />,
       },
       {
         path: 'cron-jobs',

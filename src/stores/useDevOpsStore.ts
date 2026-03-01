@@ -62,6 +62,26 @@ export interface ChatMessage {
     pendingConfirm?: { toolName: string; args: Record<string, any>; description: string };
 }
 
+export interface TeamMessage {
+    id: string;
+    role: string;
+    name: string;
+    content?: string;
+    action?: string;
+    icon?: string;
+    avatar?: string;
+    isProgress?: boolean;
+}
+
+export interface TeamSession {
+    id: string;
+    title: string;
+    messages: TeamMessage[];
+    workspace: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
 export interface ChatSession {
     id: string;
     title: string;
@@ -161,6 +181,8 @@ interface helixState {
     aiProviders: AIProvider[];
     chatSessions: ChatSession[];
     activeChatId: string | null;
+    teamSessions: TeamSession[];
+    activeTeamSessionId: string | null;
     tasks: AutoTask[];
     alerts: AlertRule[];
     logs: LogEntry[];
@@ -192,6 +214,14 @@ interface helixState {
     togglePinChatSession: (id: string) => void;
     sendMessage: (sessionId: string, content: string, images?: string[]) => Promise<void>;
     confirmToolExecution: (sessionId: string, messageId: string) => Promise<void>;
+
+    // Team Chat
+    createTeamSession: (title?: string, workspace?: string) => string;
+    deleteTeamSession: (id: string) => void;
+    setActiveTeamSessionId: (id: string | null) => void;
+    updateTeamSession: (id: string, updates: Partial<TeamSession>) => void;
+    addTeamMessage: (sessionId: string, msg: Omit<TeamMessage, 'id'>) => string;
+    updateTeamMessage: (sessionId: string, msgId: string, updates: Partial<TeamMessage>) => void;
 
     // Task
     addTask: (task: Omit<AutoTask, 'id'>) => void;
@@ -243,6 +273,8 @@ export const useDevOpsStore = create<helixState>()(
             aiProviders: [],
             chatSessions: [],
             activeChatId: null,
+            teamSessions: [],
+            activeTeamSessionId: null,
             tasks: [],
             alerts: [],
             logs: [],
@@ -461,6 +493,51 @@ export const useDevOpsStore = create<helixState>()(
                 }));
             },
 
+            // ===== Team Chat =====
+            createTeamSession: (title, workspace) => {
+                const id = generateId();
+                const session: TeamSession = {
+                    id, title: title || `需求讨论 ${new Date().toLocaleString()}`,
+                    messages: [], workspace: workspace || '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+                };
+                set((s) => ({ teamSessions: [session, ...s.teamSessions], activeTeamSessionId: id }));
+                return id;
+            },
+            deleteTeamSession: (id) =>
+                set((s) => ({
+                    teamSessions: s.teamSessions.filter((cs) => cs.id !== id),
+                    activeTeamSessionId: s.activeTeamSessionId === id ? null : s.activeTeamSessionId,
+                })),
+            setActiveTeamSessionId: (id) => set({ activeTeamSessionId: id }),
+            updateTeamSession: (id, updates) =>
+                set((s) => ({
+                    teamSessions: s.teamSessions.map((cs) => (cs.id === id ? { ...cs, ...updates } : cs)),
+                })),
+            addTeamMessage: (sessionId, msg) => {
+                const newMsg: TeamMessage = { ...msg, id: generateId() };
+                set((s) => ({
+                    teamSessions: s.teamSessions.map((cs) =>
+                        cs.id === sessionId ? {
+                            ...cs,
+                            messages: [...cs.messages, newMsg],
+                            updatedAt: new Date().toISOString()
+                        } : cs
+                    ),
+                }));
+                return newMsg.id;
+            },
+            updateTeamMessage: (sessionId, msgId, updates) => {
+                set((s) => ({
+                    teamSessions: s.teamSessions.map((cs) =>
+                        cs.id === sessionId ? {
+                            ...cs,
+                            messages: cs.messages.map(m => m.id === msgId ? { ...m, ...updates } : m),
+                            updatedAt: new Date().toISOString()
+                        } : cs
+                    ),
+                }));
+            },
+
             // ===== Tasks =====
             addTask: (task) => set((s) => ({ tasks: [...s.tasks, { ...task, id: generateId() }] })),
             removeTask: (id) => set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) })),
@@ -588,6 +665,7 @@ export const useDevOpsStore = create<helixState>()(
                 servers: state.servers,
                 aiProviders: state.aiProviders,
                 chatSessions: state.chatSessions,
+                teamSessions: state.teamSessions,
                 tasks: state.tasks,
                 alerts: state.alerts,
                 config: state.config,

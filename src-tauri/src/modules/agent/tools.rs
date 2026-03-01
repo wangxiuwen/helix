@@ -3,26 +3,23 @@
 //! Each tool is created via `agents_sdk::tool()` with its schema and handler.
 //! No intermediate JSON schema layer or dispatcher needed.
 
-
 use tracing::info;
 
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
-use agents_sdk::{ToolResult, ToolContext, ToolParameterSchema};
+use agents_sdk::{ToolContext, ToolParameterSchema, ToolResult};
 
 /// Shared HTTP client — reused across all web tools for connection pooling.
-static SHARED_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
-    std::sync::LazyLock::new(|| {
-        reqwest::Client::builder()
+static SHARED_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+    reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
-    });
-
+});
 
 /// Tracks files sent per agent session (keyed by account_id).
 static SENT_FILES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Vec<Value>>>> =
@@ -62,32 +59,31 @@ fn get_sandbox_path() -> String {
 fn validate_sandbox_path(path: &str) -> Result<String, String> {
     let sandbox = get_sandbox_path();
     let _ = std::fs::create_dir_all(&sandbox);
-    
+
     let expanded = expand_path(path);
     let abs_path = if std::path::Path::new(&expanded).is_absolute() {
         expanded
     } else {
         format!("{}/{}", sandbox, expanded)
     };
-    
-    let canonical_sandbox = std::fs::canonicalize(&sandbox)
-        .unwrap_or_else(|_| std::path::PathBuf::from(&sandbox));
-    
+
+    let canonical_sandbox =
+        std::fs::canonicalize(&sandbox).unwrap_or_else(|_| std::path::PathBuf::from(&sandbox));
+
     let path_buf = std::path::PathBuf::from(&abs_path);
     let check_path = if path_buf.exists() {
-        std::fs::canonicalize(&abs_path)
-            .unwrap_or_else(|_| path_buf.clone())
+        std::fs::canonicalize(&abs_path).unwrap_or_else(|_| path_buf.clone())
     } else {
         if let Some(parent) = path_buf.parent() {
             let _ = std::fs::create_dir_all(parent);
-            let resolved_parent = std::fs::canonicalize(parent)
-                .unwrap_or_else(|_| parent.to_path_buf());
+            let resolved_parent =
+                std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
             resolved_parent.join(path_buf.file_name().unwrap_or_default())
         } else {
             path_buf
         }
     };
-    
+
     if check_path.starts_with(&canonical_sandbox) {
         Ok(abs_path)
     } else {
@@ -98,23 +94,24 @@ fn validate_sandbox_path(path: &str) -> Result<String, String> {
     }
 }
 
-
-
 // ============================================================================
 // Schema Helpers
 // ============================================================================
 
 fn param(name: &str, ptype: &str, desc: Option<&str>) -> (String, ToolParameterSchema) {
-    (name.to_string(), ToolParameterSchema {
-        schema_type: ptype.to_string(),
-        description: desc.map(String::from),
-        properties: None,
-        required: None,
-        items: None,
-        enum_values: None,
-        default: None,
-        additional: Default::default(),
-    })
+    (
+        name.to_string(),
+        ToolParameterSchema {
+            schema_type: ptype.to_string(),
+            description: desc.map(String::from),
+            properties: None,
+            required: None,
+            items: None,
+            enum_values: None,
+            default: None,
+            additional: Default::default(),
+        },
+    )
 }
 
 fn schema(props: Vec<(String, ToolParameterSchema)>, required: Vec<&str>) -> ToolParameterSchema {
@@ -371,34 +368,33 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
 
 pub async fn execute_tool(name: &str, args: &Value, _ctx: Option<&str>) -> Result<String, String> {
     match name {
-        "shell_exec"     => tool_shell_exec(args).await,
-        "file_read"      => tool_file_read(args).await,
-        "file_write"     => tool_file_write(args).await,
-        "file_edit"      => tool_file_edit(args).await,
-        "web_fetch"      => tool_web_fetch(args).await,
-        "web_search"     => tool_web_search(args).await,
-        "memory_store"   => tool_memory_store(args).await,
-        "memory_recall"  => tool_memory_recall(args).await,
-        "list_dir"       => tool_list_dir(args),
-        "grep_search"    => tool_grep_search(args).await,
-        "find_files"     => tool_find_files(args).await,
-        "process_list"   => tool_process_list(args).await,
-        "process_kill"   => tool_process_kill(args).await,
-        "sysinfo"        => tool_sysinfo(args),
+        "shell_exec" => tool_shell_exec(args).await,
+        "file_read" => tool_file_read(args).await,
+        "file_write" => tool_file_write(args).await,
+        "file_edit" => tool_file_edit(args).await,
+        "web_fetch" => tool_web_fetch(args).await,
+        "web_search" => tool_web_search(args).await,
+        "memory_store" => tool_memory_store(args).await,
+        "memory_recall" => tool_memory_recall(args).await,
+        "list_dir" => tool_list_dir(args),
+        "grep_search" => tool_grep_search(args).await,
+        "find_files" => tool_find_files(args).await,
+        "process_list" => tool_process_list(args).await,
+        "process_kill" => tool_process_kill(args).await,
+        "sysinfo" => tool_sysinfo(args),
         "chat_send_file" => tool_chat_send_file(args).await,
         "get_current_time" => Ok(tool_get_current_time()),
         "desktop_screenshot" => tool_desktop_screenshot(args).await,
-        "browser_use"    => tool_browser_use(args).await,
+        "browser_use" => tool_browser_use(args).await,
         other => Err(format!("Unknown tool: {}", other)),
     }
 }
-
 
 // ============================================================================
 // Tool Implementations
 // ============================================================================
 
-fn expand_path(path: &str) -> String {
+pub fn expand_path(path: &str) -> String {
     if path.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
             return format!("{}/{}", home.display(), &path[2..]);
@@ -461,8 +457,16 @@ async fn tool_shell_exec(args: &Value) -> Result<String, String> {
     let code = output.status.code().unwrap_or(-1);
 
     let max = 8000;
-    let stdout_trunc = if stdout.len() > max { &stdout[..stdout.floor_char_boundary(max)] } else { &stdout };
-    let stderr_trunc = if stderr.len() > max { &stderr[..stderr.floor_char_boundary(max)] } else { &stderr };
+    let stdout_trunc = if stdout.len() > max {
+        &stdout[..stdout.floor_char_boundary(max)]
+    } else {
+        &stdout
+    };
+    let stderr_trunc = if stderr.len() > max {
+        &stderr[..stderr.floor_char_boundary(max)]
+    } else {
+        &stderr
+    };
 
     Ok(format!(
         "Exit code: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -524,21 +528,21 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         .unwrap_or("")
         .to_lowercase();
     let mime = match ext.as_str() {
-        "pdf"        => "application/pdf",
-        "png"        => "image/png",
-        "jpg"|"jpeg" => "image/jpeg",
-        "gif"        => "image/gif",
-        "webp"       => "image/webp",
-        "zip"        => "application/zip",
-        "tar"|"gz"   => "application/gzip",
-        "txt"|"md"   => "text/plain",
-        "json"       => "application/json",
-        "csv"        => "text/csv",
-        "mp3"        => "audio/mpeg",
-        "mp4"        => "video/mp4",
-        "docx"       => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xlsx"       => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        _            => "application/octet-stream",
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "zip" => "application/zip",
+        "tar" | "gz" => "application/gzip",
+        "txt" | "md" => "text/plain",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "mp3" => "audio/mpeg",
+        "mp4" => "video/mp4",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _ => "application/octet-stream",
     };
 
     let session_key = super::core::SESSION_ACCOUNT_ID
@@ -548,7 +552,10 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
     if let Ok(map) = SENT_FILES.lock() {
         if let Some(files) = map.get(&session_key) {
             if files.iter().any(|f| f["path"].as_str() == Some(&path)) {
-                return Ok(format!("文件「{}」已经发送过了，无需重复发送。", display_name));
+                return Ok(format!(
+                    "文件「{}」已经发送过了，无需重复发送。",
+                    display_name
+                ));
             }
         }
     }
@@ -559,14 +566,21 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         "mime": mime,
         "size": size_str,
     });
-    info!("[chat_send_file] Stored file metadata: name={}, path={}", display_name, path);
+    info!(
+        "[chat_send_file] Stored file metadata: name={}, path={}",
+        display_name, path
+    );
     if let Ok(mut map) = SENT_FILES.lock() {
-        map.entry(session_key).or_insert_with(Vec::new).push(file_meta);
+        map.entry(session_key)
+            .or_insert_with(Vec::new)
+            .push(file_meta);
     }
 
-    Ok(format!("✅ 文件「{}」({})已发送到对话框，用户可以点击「另存为」下载。", display_name, size_str))
+    Ok(format!(
+        "✅ 文件「{}」({})已发送到对话框，用户可以点击「另存为」下载。",
+        display_name, size_str
+    ))
 }
-
 
 // ---- File Write ----
 async fn tool_file_write(args: &Value) -> Result<String, String> {
@@ -628,7 +642,11 @@ async fn tool_file_edit(args: &Value) -> Result<String, String> {
         .await
         .map_err(|e| format!("Write '{}': {}", path, e))?;
 
-    Ok(format!("✅ Replaced {} occurrence(s) in {}", if all { count } else { 1 }, path))
+    Ok(format!(
+        "✅ Replaced {} occurrence(s) in {}",
+        if all { count } else { 1 },
+        path
+    ))
 }
 
 // ---- Web Fetch ----
@@ -663,13 +681,21 @@ async fn tool_web_fetch(args: &Value) -> Result<String, String> {
 
     let max = 15000;
     let truncated = body.len() > max;
-    let text = if truncated { &body[..body.floor_char_boundary(max)] } else { &body };
+    let text = if truncated {
+        &body[..body.floor_char_boundary(max)]
+    } else {
+        &body
+    };
 
     Ok(format!(
         "Status: {}\n{}\n{}",
         status,
         text,
-        if truncated { format!("\n... (truncated, {} total bytes)", body.len()) } else { String::new() }
+        if truncated {
+            format!("\n... (truncated, {} total bytes)", body.len())
+        } else {
+            String::new()
+        }
     ))
 }
 
@@ -683,11 +709,19 @@ async fn tool_web_search(args: &Value) -> Result<String, String> {
     let weather_keywords = ["天气", "weather", "温度", "气温"];
     if weather_keywords.iter().any(|k| query_lower.contains(k)) {
         let loc = query_lower
-            .replace("天气", "").replace("weather", "")
-            .replace("温度", "").replace("气温", "")
-            .replace("怎么样", "").replace("查询", "")
-            .trim().to_string();
-        let loc = if loc.is_empty() { "Beijing".to_string() } else { loc };
+            .replace("天气", "")
+            .replace("weather", "")
+            .replace("温度", "")
+            .replace("气温", "")
+            .replace("怎么样", "")
+            .replace("查询", "")
+            .trim()
+            .to_string();
+        let loc = if loc.is_empty() {
+            "Beijing".to_string()
+        } else {
+            loc
+        };
         let url = format!("https://wttr.in/{}?format=4&lang=zh", loc);
         if let Ok(resp) = reqwest::get(&url).await {
             if let Ok(text) = resp.text().await {
@@ -699,7 +733,9 @@ async fn tool_web_search(args: &Value) -> Result<String, String> {
     }
 
     // Hot search shortcut
-    let hot_keywords = ["热搜", "热榜", "热门", "热点", "trending", "热议", "新闻", "头条"];
+    let hot_keywords = [
+        "热搜", "热榜", "热门", "热点", "trending", "热议", "新闻", "头条",
+    ];
     if hot_keywords.iter().any(|k| query_lower.contains(k)) {
         if let Ok(result) = fetch_baidu_hot().await {
             if !result.is_empty() {
@@ -712,16 +748,25 @@ async fn tool_web_search(args: &Value) -> Result<String, String> {
     let client = &*SHARED_HTTP_CLIENT;
 
     if let Ok(results) = search_duckduckgo(client, query, num).await {
-        if !results.is_empty() { return Ok(results); }
+        if !results.is_empty() {
+            return Ok(results);
+        }
     }
     if let Ok(results) = search_bing(&client, query, num).await {
-        if !results.is_empty() { return Ok(results); }
+        if !results.is_empty() {
+            return Ok(results);
+        }
     }
     if let Ok(results) = search_baidu(&client, query, num).await {
-        if !results.is_empty() { return Ok(results); }
+        if !results.is_empty() {
+            return Ok(results);
+        }
     }
 
-    Ok(format!("搜索 '{}' 未找到结果。建议使用 web_fetch 工具直接访问目标网站。", query))
+    Ok(format!(
+        "搜索 '{}' 未找到结果。建议使用 web_fetch 工具直接访问目标网站。",
+        query
+    ))
 }
 
 // ---- Baidu Hot Search ----
@@ -729,7 +774,9 @@ async fn fetch_baidu_hot() -> Result<String, String> {
     let resp = SHARED_HTTP_CLIENT
         .get("https://top.baidu.com/api/board?platform=wise&tab=realtime")
         .header("Accept", "application/json")
-        .send().await.map_err(|e| format!("Baidu: {}", e))?;
+        .send()
+        .await
+        .map_err(|e| format!("Baidu: {}", e))?;
 
     let body = resp.text().await.map_err(|e| format!("Read: {}", e))?;
 
@@ -763,31 +810,45 @@ async fn fetch_baidu_hot() -> Result<String, String> {
 }
 
 // ---- DuckDuckGo Search ----
-async fn search_duckduckgo(client: &reqwest::Client, query: &str, num: usize) -> Result<String, String> {
+async fn search_duckduckgo(
+    client: &reqwest::Client,
+    query: &str,
+    num: usize,
+) -> Result<String, String> {
     let resp = client
         .get("https://html.duckduckgo.com/html/")
         .query(&[("q", query)])
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        .send().await.map_err(|e| format!("DDG: {}", e))?;
+        .send()
+        .await
+        .map_err(|e| format!("DDG: {}", e))?;
 
     let body = resp.text().await.map_err(|e| format!("Read: {}", e))?;
     let mut results = Vec::new();
 
     for chunk in body.split("result__a") {
-        if results.len() >= num { break; }
+        if results.len() >= num {
+            break;
+        }
         if let Some(href_start) = chunk.find("href=\"") {
             let rest = &chunk[href_start + 6..];
             if let Some(href_end) = rest.find('"') {
                 let url = &rest[..href_end];
-                if !url.starts_with("http") && !url.contains("duckduckgo.com/l/") { continue; }
+                if !url.starts_with("http") && !url.contains("duckduckgo.com/l/") {
+                    continue;
+                }
 
                 let real_url = if url.contains("uddg=") {
                     if let Some(start) = url.find("uddg=") {
                         let encoded = &url[start + 5..];
                         let end = encoded.find('&').unwrap_or(encoded.len());
                         percent_decode(&encoded[..end])
-                    } else { url.to_string() }
-                } else { url.to_string() };
+                    } else {
+                        url.to_string()
+                    }
+                } else {
+                    url.to_string()
+                };
 
                 let title = extract_text_between(rest, '>', '<');
                 if !title.is_empty() && title.len() > 2 {
@@ -797,7 +858,11 @@ async fn search_duckduckgo(client: &reqwest::Client, query: &str, num: usize) ->
         }
     }
 
-    if results.is_empty() { Err("No DDG results".into()) } else { Ok(results.join("\n\n")) }
+    if results.is_empty() {
+        Err("No DDG results".into())
+    } else {
+        Ok(results.join("\n\n"))
+    }
 }
 
 // ---- Bing Search ----
@@ -806,18 +871,24 @@ async fn search_bing(client: &reqwest::Client, query: &str, num: usize) -> Resul
         .get("https://www.bing.com/search")
         .query(&[("q", query), ("setlang", "zh-Hans")])
         .header("Accept-Language", "zh-CN,zh;q=0.9")
-        .send().await.map_err(|e| format!("Bing: {}", e))?;
+        .send()
+        .await
+        .map_err(|e| format!("Bing: {}", e))?;
 
     let body = resp.text().await.map_err(|e| format!("Read: {}", e))?;
     let mut results = Vec::new();
 
     for chunk in body.split("class=\"b_algo\"") {
-        if results.len() >= num { break; }
+        if results.len() >= num {
+            break;
+        }
         if let Some(href_start) = chunk.find("href=\"") {
             let rest = &chunk[href_start + 6..];
             if let Some(href_end) = rest.find('"') {
                 let url = &rest[..href_end];
-                if !url.starts_with("http") { continue; }
+                if !url.starts_with("http") {
+                    continue;
+                }
                 let title = extract_text_between(rest, '>', '<');
                 if !title.is_empty() {
                     results.push(format!("{}. {} — {}", results.len() + 1, title, url));
@@ -826,7 +897,11 @@ async fn search_bing(client: &reqwest::Client, query: &str, num: usize) -> Resul
         }
     }
 
-    if results.is_empty() { Err("No Bing results".into()) } else { Ok(results.join("\n\n")) }
+    if results.is_empty() {
+        Err("No Bing results".into())
+    } else {
+        Ok(results.join("\n\n"))
+    }
 }
 
 // ---- Baidu Search ----
@@ -835,18 +910,24 @@ async fn search_baidu(client: &reqwest::Client, query: &str, num: usize) -> Resu
         .get("https://www.baidu.com/s")
         .query(&[("wd", query)])
         .header("Accept-Language", "zh-CN,zh;q=0.9")
-        .send().await.map_err(|e| format!("Baidu: {}", e))?;
+        .send()
+        .await
+        .map_err(|e| format!("Baidu: {}", e))?;
 
     let body = resp.text().await.map_err(|e| format!("Read: {}", e))?;
     let mut results = Vec::new();
 
     for chunk in body.split("class=\"c-container\"") {
-        if results.len() >= num { break; }
+        if results.len() >= num {
+            break;
+        }
         if let Some(href_start) = chunk.find("href=\"") {
             let rest = &chunk[href_start + 6..];
             if let Some(href_end) = rest.find('"') {
                 let url = &rest[..href_end];
-                if !url.starts_with("http") { continue; }
+                if !url.starts_with("http") {
+                    continue;
+                }
                 let title = extract_text_between(rest, '>', '<');
                 if !title.is_empty() && title.len() > 3 {
                     results.push(format!("{}. {} — {}", results.len() + 1, title, url));
@@ -855,7 +936,11 @@ async fn search_baidu(client: &reqwest::Client, query: &str, num: usize) -> Resu
         }
     }
 
-    if results.is_empty() { Err("No Baidu results".into()) } else { Ok(results.join("\n\n")) }
+    if results.is_empty() {
+        Err("No Baidu results".into())
+    } else {
+        Ok(results.join("\n\n"))
+    }
 }
 
 // ---- Memory Store ----
@@ -865,9 +950,10 @@ async fn tool_memory_store(args: &Value) -> Result<String, String> {
     let session_id = super::core::SESSION_ACCOUNT_ID
         .try_with(|id| id.clone())
         .unwrap_or_else(|_| "default".to_string());
-    
+
     // Store with session_id as source for strict isolation
-    super::memory::memory_store_entry(key.to_string(), value.to_string(), Some(session_id), None).await?;
+    super::memory::memory_store_entry(key.to_string(), value.to_string(), Some(session_id), None)
+        .await?;
     Ok(format!("✅ Stored under key '{}'", key))
 }
 
@@ -879,9 +965,10 @@ async fn tool_memory_recall(args: &Value) -> Result<String, String> {
         .unwrap_or_else(|_| "default".to_string());
 
     let results = super::memory::memory_search(query.to_string(), Some(20)).await?;
-    
+
     // Strict isolation: only return memory from this exact conversation
-    let session_results: Vec<_> = results.into_iter()
+    let session_results: Vec<_> = results
+        .into_iter()
         .filter(|r| r.entry.source == session_id)
         .take(10)
         .collect();
@@ -889,7 +976,10 @@ async fn tool_memory_recall(args: &Value) -> Result<String, String> {
     if session_results.is_empty() {
         Ok("No matching memories found for this conversation.".to_string())
     } else {
-        let mut output = format!("Found {} memories in this conversation:\n\n", session_results.len());
+        let mut output = format!(
+            "Found {} memories in this conversation:\n\n",
+            session_results.len()
+        );
         for r in &session_results {
             output.push_str(&format!("**{}**: {}\n\n", r.entry.key, r.entry.content));
         }
@@ -904,7 +994,12 @@ fn tool_list_dir(args: &Value) -> Result<String, String> {
     let max_depth = args["max_depth"].as_u64().unwrap_or(1) as usize;
 
     let mut entries = Vec::new();
-    list_dir_recursive(&path, 0, if recursive { max_depth } else { 1 }, &mut entries)?;
+    list_dir_recursive(
+        &path,
+        0,
+        if recursive { max_depth } else { 1 },
+        &mut entries,
+    )?;
 
     if entries.is_empty() {
         Ok(format!("Directory '{}' is empty.", path))
@@ -913,19 +1008,33 @@ fn tool_list_dir(args: &Value) -> Result<String, String> {
     }
 }
 
-fn list_dir_recursive(path: &str, depth: usize, max_depth: usize, entries: &mut Vec<String>) -> Result<(), String> {
-    if depth >= max_depth || entries.len() > 500 { return Ok(()); }
+fn list_dir_recursive(
+    path: &str,
+    depth: usize,
+    max_depth: usize,
+    entries: &mut Vec<String>,
+) -> Result<(), String> {
+    if depth >= max_depth || entries.len() > 500 {
+        return Ok(());
+    }
     let dir = std::fs::read_dir(path).map_err(|e| format!("Read dir '{}': {}", path, e))?;
     let indent = "  ".repeat(depth);
     for entry in dir {
         if let Ok(entry) = entry {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') { continue; }
+            if name.starts_with('.') {
+                continue;
+            }
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             let prefix = if is_dir { "📁" } else { "📄" };
             entries.push(format!("{}{} {}", indent, prefix, name));
             if is_dir && depth + 1 < max_depth {
-                let _ = list_dir_recursive(&entry.path().to_string_lossy(), depth + 1, max_depth, entries);
+                let _ = list_dir_recursive(
+                    &entry.path().to_string_lossy(),
+                    depth + 1,
+                    max_depth,
+                    entries,
+                );
             }
         }
     }
@@ -941,7 +1050,9 @@ async fn tool_grep_search(args: &Value) -> Result<String, String> {
     let include = args["include"].as_str().unwrap_or("");
 
     let mut cmd_parts = vec!["grep", "-rn"];
-    if ignore_case { cmd_parts.push("-i"); }
+    if ignore_case {
+        cmd_parts.push("-i");
+    }
     let max_flag = format!("-m{}", max_results);
     cmd_parts.push(&max_flag);
     let include_flag;
@@ -965,7 +1076,11 @@ async fn tool_grep_search(args: &Value) -> Result<String, String> {
         Ok(format!("No matches for '{}' in {}", pattern, path))
     } else {
         let max = 5000;
-        Ok(if result.len() > max { result[..max].to_string() } else { result.to_string() })
+        Ok(if result.len() > max {
+            result[..max].to_string()
+        } else {
+            result.to_string()
+        })
     }
 }
 
@@ -978,8 +1093,10 @@ async fn tool_find_files(args: &Value) -> Result<String, String> {
 
     let output = tokio::process::Command::new("find")
         .arg(&path)
-        .arg("-maxdepth").arg(max_depth.to_string())
-        .arg("-name").arg(name)
+        .arg("-maxdepth")
+        .arg(max_depth.to_string())
+        .arg("-name")
+        .arg(name)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -1012,8 +1129,13 @@ async fn tool_process_list(args: &Value) -> Result<String, String> {
         }
         let cpu = process.cpu_usage();
         let mem = process.memory() / 1024 / 1024;
-        procs.push(format!("PID {} | {} | CPU: {:.1}% | MEM: {}MB", pid, name, cpu, mem));
-        if procs.len() >= limit { break; }
+        procs.push(format!(
+            "PID {} | {} | CPU: {:.1}% | MEM: {}MB",
+            pid, name, cpu, mem
+        ));
+        if procs.len() >= limit {
+            break;
+        }
     }
 
     if procs.is_empty() {
@@ -1039,7 +1161,11 @@ async fn tool_process_kill(args: &Value) -> Result<String, String> {
         if output.status.success() {
             Ok(format!("✅ Killed PID {}", pid))
         } else {
-            Err(format!("Failed to kill PID {}: {}", pid, String::from_utf8_lossy(&output.stderr)))
+            Err(format!(
+                "Failed to kill PID {}: {}",
+                pid,
+                String::from_utf8_lossy(&output.stderr)
+            ))
         }
     } else if let Some(name) = name {
         let output = tokio::process::Command::new("pkill")
@@ -1051,7 +1177,11 @@ async fn tool_process_kill(args: &Value) -> Result<String, String> {
         if output.status.success() {
             Ok(format!("✅ Killed processes matching '{}'", name))
         } else {
-            Err(format!("Failed to kill '{}': {}", name, String::from_utf8_lossy(&output.stderr)))
+            Err(format!(
+                "Failed to kill '{}': {}",
+                name,
+                String::from_utf8_lossy(&output.stderr)
+            ))
         }
     } else {
         Err("Must provide 'pid' or 'name'".to_string())
@@ -1081,9 +1211,16 @@ fn tool_sysinfo(_args: &Value) -> Result<String, String> {
          - CPUs: {}\n\
          - Memory: {} / {} MB ({:.1}%)\n\
          - Uptime: {}h {}m",
-        os, os_ver, kernel, hostname, cpu_count,
-        used_mem, total_mem, used_mem as f64 / total_mem as f64 * 100.0,
-        uptime / 3600, (uptime % 3600) / 60
+        os,
+        os_ver,
+        kernel,
+        hostname,
+        cpu_count,
+        used_mem,
+        total_mem,
+        used_mem as f64 / total_mem as f64 * 100.0,
+        uptime / 3600,
+        (uptime % 3600) / 60
     ))
 }
 
@@ -1101,46 +1238,57 @@ fn extract_text_between(html: &str, open: char, close: char) -> String {
     String::new()
 }
 
-
-
 fn percent_decode(input: &str) -> String {
     let mut result = Vec::new();
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(val) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[i+1..i+3]).unwrap_or(""), 16,
-            ) {
+            if let Ok(val) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 result.push(val);
                 i += 3;
                 continue;
             }
         }
-        if bytes[i] == b'+' { result.push(b' '); } else { result.push(bytes[i]); }
+        if bytes[i] == b'+' {
+            result.push(b' ');
+        } else {
+            result.push(bytes[i]);
+        }
         i += 1;
     }
     String::from_utf8(result).unwrap_or_else(|_| input.to_string())
 }
 
-
 #[tauri::command]
-pub async fn tool_image_describe(image_path: String, prompt: Option<String>) -> Result<String, String> {
+pub async fn tool_image_describe(
+    image_path: String,
+    prompt: Option<String>,
+) -> Result<String, String> {
     let prompt = prompt.unwrap_or_else(|| "Describe this image in detail.".to_string());
-    let bytes = tokio::fs::read(&image_path).await.map_err(|e| format!("read: {}", e))?;
+    let bytes = tokio::fs::read(&image_path)
+        .await
+        .map_err(|e| format!("read: {}", e))?;
 
-    let mime = if image_path.ends_with(".png") { "image/png" }
-        else if image_path.ends_with(".gif") { "image/gif" }
-        else if image_path.ends_with(".webp") { "image/webp" }
-        else { "image/jpeg" };
+    let mime = if image_path.ends_with(".png") {
+        "image/png"
+    } else if image_path.ends_with(".gif") {
+        "image/gif"
+    } else if image_path.ends_with(".webp") {
+        "image/webp"
+    } else {
+        "image/jpeg"
+    };
 
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
 
     let config = crate::modules::config::load_app_config().map_err(|e| format!("config: {}", e))?;
     let ai = &config.ai_config;
-    if ai.api_key.is_empty() && ai.provider != "ollama" && ai.provider != "custom" { 
-        return Err("API key not configured".to_string()); 
+    if ai.api_key.is_empty() && ai.provider != "ollama" && ai.provider != "custom" {
+        return Err("API key not configured".to_string());
     }
 
     let url_str = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
@@ -1155,11 +1303,16 @@ pub async fn tool_image_describe(image_path: String, prompt: Option<String>) -> 
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
-        .build().unwrap_or_else(|_| reqwest::Client::new());
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
 
-    let resp = client.post(&url_str)
+    let resp = client
+        .post(&url_str)
         .header("Authorization", format!("Bearer {}", ai.api_key))
-        .json(&body).send().await.map_err(|e| format!("vision: {}", e))?;
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("vision: {}", e))?;
 
     if !resp.status().is_success() {
         let err = resp.text().await.unwrap_or_default();
@@ -1167,7 +1320,10 @@ pub async fn tool_image_describe(image_path: String, prompt: Option<String>) -> 
     }
 
     let data: Value = resp.json().await.map_err(|e| format!("parse: {}", e))?;
-    Ok(data["choices"][0]["message"]["content"].as_str().unwrap_or("Unable to describe image").to_string())
+    Ok(data["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("Unable to describe image")
+        .to_string())
 }
 
 // ---- Get Current Time ----
@@ -1223,7 +1379,7 @@ async fn tool_desktop_screenshot(args: &Value) -> Result<String, String> {
             .await;
 
         match output {
-            Ok(o) if o.status.success() => {},
+            Ok(o) if o.status.success() => {}
             _ => {
                 // Fallback to scrot
                 let output = tokio::process::Command::new("scrot")
@@ -1301,4 +1457,3 @@ async fn tool_browser_use(args: &Value) -> Result<String, String> {
         _ => Err(format!("Unknown browser action: '{}'. Valid: launch, goto, click, fill, snapshot, screenshot, stop", action)),
     }
 }
-
