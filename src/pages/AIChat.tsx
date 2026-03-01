@@ -22,6 +22,7 @@ import {
     User,
     Wrench,
     X,
+    Edit2,
 } from 'lucide-react';
 import { useDevOpsStore, AIProvider } from '../stores/useDevOpsStore';
 import { useConfigStore } from '../stores/useConfigStore';
@@ -92,6 +93,7 @@ function AIChat() {
         updateChatSession,
         togglePinChatSession,
         aiProviders,
+        loading,
     } = useDevOpsStore();
 
     const isSessionLoading = !!useDevOpsStore(s => s.loading[`chat-${activeChatId}`]);
@@ -131,6 +133,9 @@ function AIChat() {
 
     // Avatar Picker State
     const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+    const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+    const [editingSessionTitle, setEditingSessionTitle] = useState('');
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, sessionId: string } | null>(null);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -168,10 +173,17 @@ function AIChat() {
         const handler = (e: MouseEvent) => {
             if (providerMenuRef.current && !providerMenuRef.current.contains(e.target as Node)) setShowProviderMenu(false);
             if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) setShowModelMenu(false);
+            setContextMenu(null);
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
     }, []);
+
+    // Context Menu Handlers
+    const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
+        e.preventDefault();
+        setContextMenu({ x: e.clientX, y: e.clientY, sessionId });
+    };
 
     // ── Resizable divider ─────────────────────────────────
     const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
@@ -298,67 +310,139 @@ function AIChat() {
                     {filteredSessions.length === 0 ? (
                         <div className="px-4 py-12 text-center text-gray-400 text-xs">{t('chat.no_sessions', '暂无对话')}</div>
                     ) : (
-                        filteredSessions.map((session) => (
-                            <div
-                                key={session.id}
-                                className={`flex items-center px-3 py-2.5 cursor-pointer transition-colors group ${activeChatId === session.id
-                                    ? 'bg-black/[0.08] dark:bg-white/[0.08]'
-                                    : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.04]'
-                                    }`}
-                                onClick={() => setActiveChatId(session.id)}
-                            >
-                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mr-3 overflow-hidden relative">
-                                    {session.agentAvatarUrl ? (
-                                        <img src={session.agentAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                                    ) : (
-                                        <Bot size={17} className="text-white" />
-                                    )}
-                                    {session.pinned && (
-                                        <div className="absolute top-0 right-0 w-3 h-3 bg-white dark:bg-[#252525] rounded-full flex items-center justify-center">
-                                            <Pin size={8} className="text-[#07c160] rotate-45" fill="currentColor" />
+                        filteredSessions.map((session) => {
+                            const isWorking = loading[`chat-${session.id}`];
+                            return (
+                                <div
+                                    key={session.id}
+                                    className={`flex items-center px-3 py-2.5 cursor-pointer transition-colors group ${activeChatId === session.id || contextMenu?.sessionId === session.id
+                                        ? 'bg-black/[0.08] dark:bg-white/[0.08]'
+                                        : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.04]'
+                                        }`}
+                                    onClick={() => setActiveChatId(session.id)}
+                                    onContextMenu={(e) => handleContextMenu(e, session.id)}
+                                >
+                                    <div className="relative shrink-0 mr-3">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shadow-sm bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5`}>
+                                            {session.agentAvatarUrl ? (
+                                                <img src={session.agentAvatarUrl} alt="Avatar" className="w-[85%] h-[85%] object-cover rounded-full" />
+                                            ) : (
+                                                <Bot size={17} className="text-[#07c160]" />
+                                            )}
                                         </div>
-                                    )}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate">{session.title}</span>
-                                        <span className="text-[10px] text-gray-400 shrink-0 ml-2">{getLastTime(session)}</span>
+                                        {session.pinned && (
+                                            <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-white dark:bg-[#252525] rounded-full flex items-center justify-center shrink-0 z-10">
+                                                <Pin size={9} className="text-[#07c160] rotate-45" fill="currentColor" />
+                                            </div>
+                                        )}
+                                        {/* Working Indicator */}
+                                        {isWorking && (
+                                            <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-white dark:bg-[#252525] rounded-full flex items-center justify-center shrink-0 z-10">
+                                                <div className="w-2.5 h-2.5 bg-[#07c160] rounded-full animate-pulse" />
+                                            </div>
+                                        )}
+                                        {/* Unread Badge */}
+                                        {activeChatId !== session.id && (session.unreadCount || 0) > 0 && !isWorking && (
+                                            <div className="absolute -top-1.5 -left-1.5 w-[18px] h-[18px] bg-red-500 rounded-full text-[9px] font-bold text-white flex items-center justify-center border-2 border-[#f5f5f5] dark:border-[#252525] shrink-0 z-10">
+                                                {session.unreadCount! > 99 ? '99+' : session.unreadCount}
+                                            </div>
+                                        )}
                                     </div>
-                                    <div className="flex items-center justify-between mt-0.5">
-                                        <p className="text-xs text-gray-400 truncate">
-                                            {session.workspace
-                                                ? <span className="flex items-center gap-1"><FolderOpen size={10} />{session.workspace.split('/').pop()}</span>
-                                                : (getLastMessage(session) || <span className="italic opacity-50">{t('chat.new_chat', '新对话')}</span>)
-                                            }
-                                        </p>
-                                        <div className="flex items-center gap-1 shrink-0 ml-1">
-                                            <button
-                                                className={`p-0.5 rounded transition-all shrink-0 ${session.pinned ? 'text-[#07c160] opacity-100' : 'text-gray-400 opacity-0 group-hover:opacity-100'}`}
-                                                onClick={(e) => { e.stopPropagation(); togglePinChatSession(session.id); }}
-                                                title={session.pinned ? t('chat.unpin', '取消置顶') : t('chat.pin', '置顶')}
-                                            >
-                                                <Pin size={11} className={session.pinned ? "rotate-45" : ""} fill={session.pinned ? "currentColor" : "none"} />
-                                            </button>
-                                            <button
-                                                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-red-400 transition-all shrink-0"
-                                                onClick={(e) => {
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center justify-between min-w-0">
+                                            {editingSessionId === session.id ? (
+                                                <input
+                                                    autoFocus
+                                                    className="w-full text-[13px] font-medium text-gray-800 dark:text-gray-200 bg-transparent border-b border-[#07c160] outline-none"
+                                                    value={editingSessionTitle}
+                                                    onChange={(e) => setEditingSessionTitle(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            if (editingSessionTitle.trim()) updateChatSession(session.id, { title: editingSessionTitle.trim() });
+                                                            setEditingSessionId(null);
+                                                        } else if (e.key === 'Escape') {
+                                                            setEditingSessionId(null);
+                                                        }
+                                                    }}
+                                                    onBlur={() => {
+                                                        if (editingSessionTitle.trim()) updateChatSession(session.id, { title: editingSessionTitle.trim() });
+                                                        setEditingSessionId(null);
+                                                    }}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                />
+                                            ) : (
+                                                <div className="flex items-center gap-1.5 min-w-0" onDoubleClick={(e) => {
                                                     e.stopPropagation();
-                                                    if (window.confirm(t('chat.confirm_delete', '确定要删除此对话吗？'))) {
-                                                        deleteChatSession(session.id);
-                                                    }
-                                                }}
-                                                title={t('chat.delete_session', '删除对话')}
-                                            >
-                                                <Trash2 size={11} className="text-gray-400" />
-                                            </button>
+                                                    setEditingSessionId(session.id);
+                                                    setEditingSessionTitle(session.title);
+                                                }}>
+                                                    <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate group-hover:text-gray-900 dark:group-hover:text-white transition-colors">{session.title}</span>
+                                                </div>
+                                            )}
+                                            <span className="text-[10px] text-gray-400 shrink-0 ml-2">{getLastTime(session)}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between mt-0.5">
+                                            <p className="text-xs text-gray-400 truncate">
+                                                {session.workspace
+                                                    ? <span className="flex items-center gap-1"><FolderOpen size={10} />{session.workspace.split('/').pop()}</span>
+                                                    : (getLastMessage(session) || <span className="italic opacity-50">{t('chat.new_chat', '新对话')}</span>)
+                                                }
+                                            </p>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        ))
+                            );
+                        })
                     )}
                 </div>
             </div>
+
+            {/* Context Menu overlay */}
+            {contextMenu && (
+                <div
+                    className="fixed z-[100] w-40 bg-white/90 dark:bg-[#333333]/90 backdrop-blur-xl rounded-xl shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-1.5 overflow-hidden"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    onContextMenu={(e) => e.preventDefault()}
+                >
+                    <button
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-[#07c160] hover:text-white flex items-center justify-between transition-colors group"
+                        onClick={() => {
+                            togglePinChatSession(contextMenu.sessionId);
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span>{chatSessions.find(s => s.id === contextMenu.sessionId)?.pinned ? t('chat.unpin', '取消置顶') : t('chat.pin', '置顶')}</span>
+                        <Pin size={13} className={chatSessions.find(s => s.id === contextMenu.sessionId)?.pinned ? "rotate-45" : ""} fill="currentColor" />
+                    </button>
+                    <button
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-[#07c160] hover:text-white flex items-center justify-between transition-colors mt-0.5 group"
+                        onClick={() => {
+                            const session = chatSessions.find(s => s.id === contextMenu.sessionId);
+                            if (session) {
+                                setEditingSessionId(session.id);
+                                setEditingSessionTitle(session.title);
+                            }
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span>{t('chat.rename', '重命名')}</span>
+                        <Edit2 size={13} />
+                    </button>
+                    <div className="w-full h-px bg-black/5 dark:bg-white/10 my-1" />
+                    <button
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-500 hover:bg-red-500 hover:text-white flex items-center justify-between transition-colors group"
+                        onClick={() => {
+                            if (window.confirm(t('chat.confirm_delete', '确定要删除此对话吗？'))) {
+                                deleteChatSession(contextMenu.sessionId);
+                            }
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span>{t('chat.delete', '删除')}</span>
+                        <Trash2 size={13} />
+                    </button>
+                </div>
+            )}
 
             {/* ── Resizable divider ────────────────────────────────── */}
             <div
@@ -401,7 +485,7 @@ function AIChat() {
                             data-tauri-drag-region
                         >
                             <div
-                                className="w-7 h-7 rounded-sm overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity bg-gradient-to-br from-[#07c160] to-[#05a050] mr-3"
+                                className={`w-7 h-7 rounded-sm overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity mr-3 ${activeSession.agentAvatarUrl ? 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5' : 'bg-gradient-to-br from-[#07c160] to-[#05a050]'}`}
                                 onClick={() => setShowAvatarPicker(true)}
                                 title={t('chat.change_avatar', '更换助手头像')}
                                 style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -431,9 +515,9 @@ function AIChat() {
                             {activeSession.messages.map((msg) => (
                                 <div key={msg.id} className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                                     <div
-                                        className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center mt-0.5 overflow-hidden ${msg.role === 'user'
-                                            ? 'bg-[#95ec69] dark:bg-[#3eb575]'
-                                            : 'bg-gradient-to-br from-[#07c160] to-[#05a050] cursor-pointer hover:shadow-md transition-shadow'
+                                        className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center mt-0.5 overflow-hidden shadow-sm ${msg.role === 'user'
+                                            ? config?.appAvatarUrl ? 'bg-white dark:bg-[#404040]' : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5'
+                                            : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5 cursor-pointer hover:shadow-md transition-shadow'
                                             }`}
                                         onClick={() => {
                                             if (msg.role !== 'user') setShowAvatarPicker(true);
@@ -442,11 +526,11 @@ function AIChat() {
                                     >
                                         {msg.role === 'user'
                                             ? config?.appAvatarUrl
-                                                ? <img src={config.appAvatarUrl} alt="User" className="w-full h-full object-cover" />
-                                                : <User size={15} className="text-gray-700" />
+                                                ? <img src={config.appAvatarUrl} alt="User" className="w-[85%] h-[85%] object-cover rounded-full" />
+                                                : <User size={15} className="text-gray-700 dark:text-gray-300" />
                                             : activeSession.agentAvatarUrl
                                                 ? <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
-                                                : <Bot size={15} className="text-white" />
+                                                : <Bot size={15} className="text-[#07c160]" />
                                         }
                                     </div>
                                     <div className="max-w-[65%]">
@@ -562,11 +646,11 @@ function AIChat() {
                             ))}
                             {isSessionLoading && (
                                 <div className="flex gap-2.5">
-                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mt-0.5 overflow-hidden shadow-sm">
+                                    <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 overflow-hidden shadow-sm bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5`}>
                                         {activeSession.agentAvatarUrl ? (
                                             <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
                                         ) : (
-                                            <Bot size={15} className="text-white" />
+                                            <Bot size={15} className="text-[#07c160]" />
                                         )}
                                     </div>
                                     <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[65%]">
