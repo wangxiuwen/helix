@@ -17,6 +17,9 @@ import {
     AlertCircle,
     CheckCircle2,
     FileText,
+    Globe,
+    Download,
+    Star,
 } from 'lucide-react';
 
 interface Skill {
@@ -32,7 +35,26 @@ interface Skill {
     homepage: string;
 }
 
+interface EvoAsset {
+    id: string;
+    asset_type: string;
+    name: string;
+    version: string;
+    description: string;
+    author: string;
+    tags: string;
+    content: string;
+    promoted: boolean;
+    downloads: number;
+    created_at: string;
+}
+
+type TabKey = 'local' | 'hub';
+
 export default function Skills() {
+    const [tab, setTab] = useState<TabKey>('local');
+
+    // Local skills state
     const [skills, setSkills] = useState<Skill[]>([]);
     const [selected, setSelected] = useState<Skill | null>(null);
     const [search, setSearch] = useState('');
@@ -44,6 +66,12 @@ export default function Skills() {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [gitUrl, setGitUrl] = useState('');
     const [newSkillName, setNewSkillName] = useState('');
+
+    // Skills Hub state
+    const [hubAssets, setHubAssets] = useState<EvoAsset[]>([]);
+    const [hubSearch, setHubSearch] = useState('');
+    const [hubLoading, setHubLoading] = useState(false);
+    const [hubSelected, setHubSelected] = useState<EvoAsset | null>(null);
 
     useEffect(() => {
         if (toast) { const t = setTimeout(() => setToast(''), 3000); return () => clearTimeout(t); }
@@ -70,17 +98,40 @@ export default function Skills() {
         }
     }, [selected]);
 
+    const loadHubAssets = useCallback(async () => {
+        setHubLoading(true);
+        try {
+            const assets = await invoke<EvoAsset[]>('evomap_fetch', { assetType: 'skill' });
+            setHubAssets(assets);
+        } catch (e: any) {
+            // Fallback: try local assets
+            try {
+                const assets = await invoke<EvoAsset[]>('evomap_list_assets', { assetType: 'skill', limit: 50 });
+                setHubAssets(assets);
+            } catch {
+                setError('Skills Hub 暂不可用: ' + String(e));
+            }
+        } finally {
+            setHubLoading(false);
+        }
+    }, []);
+
     useEffect(() => {
         loadSkills();
         invoke<string>('skills_get_dir').then(setSkillsDir).catch(() => { });
 
-        // Hot-reload: listen for backend skills-changed event
         let unlisten: (() => void) | null = null;
         import('@tauri-apps/api/event').then(({ listen }) => {
             listen<any>('skills-changed', () => { loadSkills(); }).then(fn => { unlisten = fn; });
         });
         return () => { if (unlisten) unlisten(); };
     }, []);
+
+    useEffect(() => {
+        if (tab === 'hub' && hubAssets.length === 0) {
+            loadHubAssets();
+        }
+    }, [tab, hubAssets.length, loadHubAssets]);
 
     const handleToggle = async (skill: Skill) => {
         try {
@@ -136,73 +187,164 @@ export default function Skills() {
         s.tags.some(t => t.toLowerCase().includes(search.toLowerCase()))
     );
 
+    const filteredHub = hubAssets.filter(a =>
+        !hubSearch || a.name.toLowerCase().includes(hubSearch.toLowerCase()) ||
+        a.description.toLowerCase().includes(hubSearch.toLowerCase())
+    );
+
     const enabledCount = skills.filter(s => s.enabled).length;
 
     return (
         <>
-            {/* Left: Skill list (same width/style as chat session list) */}
+            {/* Left: list panel */}
             <div className="w-[250px] shrink-0 bg-[#f7f7f7] dark:bg-[#252525] flex flex-col border-r border-black/5 dark:border-white/5">
-                {/* Header */}
-                <div className="px-3 pt-4 pb-1">
-                    <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs text-gray-400">{skills.length} 个技能 · {enabledCount} 已启用</span>
-                        <div className="flex items-center gap-1">
-                            <button onClick={loadSkills} disabled={loading} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="刷新">
-                                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                            </button>
-                            <button onClick={() => setShowCreateModal(true)} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="新建技能">
-                                <Plus className="w-3.5 h-3.5" />
-                            </button>
-                        </div>
-                    </div>
-                    <div className="relative">
-                        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                        <input
-                            type="text"
-                            value={search}
-                            onChange={e => setSearch(e.target.value)}
-                            placeholder="搜索技能..."
-                            className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400"
-                        />
+                {/* Tab switcher */}
+                <div className="px-3 pt-4 pb-2">
+                    <div className="flex bg-[#e5e5e5] dark:bg-[#333] rounded-lg p-0.5 mb-3">
+                        <button
+                            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'local' ? 'bg-white dark:bg-[#444] text-gray-800 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400'}`}
+                            onClick={() => setTab('local')}
+                        >
+                            本地技能
+                        </button>
+                        <button
+                            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'hub' ? 'bg-white dark:bg-[#444] text-gray-800 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400'}`}
+                            onClick={() => setTab('hub')}
+                        >
+                            <span className="flex items-center justify-center gap-1"><Globe size={12} />Skills Hub</span>
+                        </button>
                     </div>
                 </div>
 
-                {/* Skill list */}
-                <div className="flex-1 overflow-y-auto">
-                    {filtered.length === 0 ? (
-                        <div className="px-4 py-12 text-center text-gray-400 text-xs">没有找到技能</div>
-                    ) : (
-                        filtered.map(skill => (
-                            <div
-                                key={skill.name}
-                                onClick={() => setSelected(skill)}
-                                className={`flex items-center px-3 py-3 cursor-pointer transition-colors group ${selected?.name === skill.name
-                                    ? 'bg-[#c9c9c9] dark:bg-[#383838]'
-                                    : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'
-                                    }`}
-                            >
-                                <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-[#404040] flex items-center justify-center shrink-0 mr-3 text-lg">
-                                    {skill.icon || '🧩'}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{skill.name}</span>
-                                        <span className="text-[10px] text-gray-400 shrink-0 ml-2">v{skill.version}</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 mt-0.5">
-                                        <p className="text-xs text-gray-400 truncate flex-1">{skill.description}</p>
-                                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${skill.enabled ? 'bg-[#07c160]/10 text-[#07c160]' : 'bg-gray-200 dark:bg-gray-700 text-gray-400'}`}>
-                                            {skill.enabled ? '启用' : '禁用'}
-                                        </span>
-                                    </div>
+                {tab === 'local' ? (
+                    <>
+                        {/* Local header */}
+                        <div className="px-3 pb-1">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-gray-400">{skills.length} 个技能 · {enabledCount} 已启用</span>
+                                <div className="flex items-center gap-1">
+                                    <button onClick={loadSkills} disabled={loading} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="刷新">
+                                        <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                                    </button>
+                                    <button onClick={() => setShowCreateModal(true)} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="新建技能">
+                                        <Plus className="w-3.5 h-3.5" />
+                                    </button>
                                 </div>
                             </div>
-                        ))
-                    )}
-                </div>
+                            <div className="relative">
+                                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input
+                                    type="text"
+                                    value={search}
+                                    onChange={e => setSearch(e.target.value)}
+                                    placeholder="搜索技能..."
+                                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Local skill list */}
+                        <div className="flex-1 overflow-y-auto">
+                            {filtered.length === 0 ? (
+                                <div className="px-4 py-12 text-center text-gray-400 text-xs">没有找到技能</div>
+                            ) : (
+                                filtered.map(skill => (
+                                    <div
+                                        key={skill.name}
+                                        onClick={() => setSelected(skill)}
+                                        className={`flex items-center px-3 py-3 cursor-pointer transition-colors group ${selected?.name === skill.name
+                                            ? 'bg-[#c9c9c9] dark:bg-[#383838]'
+                                            : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'
+                                            }`}
+                                    >
+                                        <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-[#404040] flex items-center justify-center shrink-0 mr-3 text-lg">
+                                            {skill.icon || '🧩'}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{skill.name}</span>
+                                                <span className="text-[10px] text-gray-400 shrink-0 ml-2">v{skill.version}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5 mt-0.5">
+                                                <p className="text-xs text-gray-400 truncate flex-1">{skill.description}</p>
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded ${skill.enabled ? 'bg-[#07c160]/10 text-[#07c160]' : 'bg-gray-200 dark:bg-gray-700 text-gray-400'}`}>
+                                                    {skill.enabled ? '启用' : '禁用'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        {/* Hub header */}
+                        <div className="px-3 pb-1">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-gray-400">{hubAssets.length} 个远程技能</span>
+                                <button onClick={loadHubAssets} disabled={hubLoading} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="刷新">
+                                    <RefreshCw className={`w-3.5 h-3.5 ${hubLoading ? 'animate-spin' : ''}`} />
+                                </button>
+                            </div>
+                            <div className="relative">
+                                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input
+                                    type="text"
+                                    value={hubSearch}
+                                    onChange={e => setHubSearch(e.target.value)}
+                                    placeholder="搜索 Skills Hub..."
+                                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Hub asset list */}
+                        <div className="flex-1 overflow-y-auto">
+                            {hubLoading ? (
+                                <div className="flex items-center justify-center py-12 text-gray-400">
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                </div>
+                            ) : filteredHub.length === 0 ? (
+                                <div className="px-4 py-12 text-center text-gray-400 text-xs">
+                                    <Globe className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                                    <p>暂无远程技能</p>
+                                    <p className="mt-1 text-[10px]">点击刷新检查 EvoMap Hub</p>
+                                </div>
+                            ) : (
+                                filteredHub.map(asset => (
+                                    <div
+                                        key={asset.id}
+                                        onClick={() => setHubSelected(asset)}
+                                        className={`flex items-center px-3 py-3 cursor-pointer transition-colors ${hubSelected?.id === asset.id
+                                            ? 'bg-[#c9c9c9] dark:bg-[#383838]'
+                                            : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'
+                                            }`}
+                                    >
+                                        <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center shrink-0 mr-3">
+                                            <Globe size={18} className="text-blue-500" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{asset.name}</span>
+                                                <span className="text-[10px] text-gray-400 shrink-0 ml-2">v{asset.version}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5 mt-0.5">
+                                                <p className="text-xs text-gray-400 truncate flex-1">{asset.description}</p>
+                                                {asset.promoted && (
+                                                    <Star size={10} className="text-amber-400 fill-amber-400 shrink-0" />
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </>
+                )}
             </div>
 
-            {/* Right: Skill detail */}
+            {/* Right: detail panel */}
             <div className="flex-1 flex flex-col min-w-0 bg-[#f5f5f5] dark:bg-[#1e1e1e]">
                 {/* Notifications */}
                 {(error || toast) && (
@@ -223,84 +365,162 @@ export default function Skills() {
                 {/* Header bar */}
                 <div className="h-14 px-5 flex items-center justify-between border-b border-black/5 dark:border-white/5 shrink-0" data-tauri-drag-region>
                     <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                        {selected ? selected.name : '技能管理'}
+                        {tab === 'local' ? (selected ? selected.name : '技能管理') : (hubSelected ? hubSelected.name : 'Skills Hub')}
                     </h3>
-                    <div className="flex items-center gap-1">
-                        <button onClick={handleOpenDir} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1" title={skillsDir}>
-                            <FolderOpen className="w-3.5 h-3.5" />打开目录
-                        </button>
-                        <button onClick={() => setShowInstallModal(true)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1">
-                            <GitBranch className="w-3.5 h-3.5" />Git 安装
-                        </button>
-                    </div>
+                    {tab === 'local' && (
+                        <div className="flex items-center gap-1">
+                            <button onClick={handleOpenDir} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1" title={skillsDir}>
+                                <FolderOpen className="w-3.5 h-3.5" />打开目录
+                            </button>
+                            <button onClick={() => setShowInstallModal(true)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1">
+                                <GitBranch className="w-3.5 h-3.5" />Git 安装
+                            </button>
+                        </div>
+                    )}
                 </div>
 
-                {selected ? (
-                    <div className="flex-1 overflow-y-auto px-8 py-6">
-                        <div className="max-w-2xl">
-                            {/* Skill header */}
-                            <div className="flex items-start gap-4 mb-5">
-                                <span className="text-4xl">{selected.icon}</span>
-                                <div className="flex-1">
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">{selected.name}</h2>
-                                        <span className="text-xs text-gray-400">v{selected.version}</span>
-                                    </div>
-                                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{selected.description}</p>
-                                    <div className="flex items-center gap-3 text-xs text-gray-400">
-                                        <span className="flex items-center gap-1"><User className="w-3 h-3" />{selected.author}</span>
-                                        {selected.tags.length > 0 && <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{selected.tags.join(', ')}</span>}
-                                        {selected.homepage && (
-                                            <a href={selected.homepage} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[#07c160] hover:underline">
-                                                <ExternalLink className="w-3 h-3" />主页
-                                            </a>
-                                        )}
+                {/* Detail Content */}
+                {tab === 'local' ? (
+                    // Local skill detail
+                    selected ? (
+                        <div className="flex-1 overflow-y-auto px-8 py-6">
+                            <div className="max-w-2xl">
+                                <div className="flex items-start gap-4 mb-5">
+                                    <span className="text-4xl">{selected.icon}</span>
+                                    <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">{selected.name}</h2>
+                                            <span className="text-xs text-gray-400">v{selected.version}</span>
+                                        </div>
+                                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{selected.description}</p>
+                                        <div className="flex items-center gap-3 text-xs text-gray-400">
+                                            <span className="flex items-center gap-1"><User className="w-3 h-3" />{selected.author}</span>
+                                            {selected.tags.length > 0 && <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{selected.tags.join(', ')}</span>}
+                                            {selected.homepage && (
+                                                <a href={selected.homepage} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[#07c160] hover:underline">
+                                                    <ExternalLink className="w-3 h-3" />主页
+                                                </a>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
 
-                            {/* Actions */}
-                            <div className="flex items-center gap-3 mb-5 pb-5 border-b border-black/5 dark:border-white/5">
-                                <button
-                                    onClick={() => handleToggle(selected)}
-                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${selected.enabled
-                                        ? 'bg-[#07c160] text-white hover:bg-[#06ad56]'
-                                        : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-                                        }`}
-                                >
-                                    {selected.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
-                                    {selected.enabled ? '已启用' : '点击启用'}
-                                </button>
-                                <button onClick={() => handleUninstall(selected)} className="flex items-center gap-1 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors">
-                                    <Trash2 className="w-3.5 h-3.5" />卸载
-                                </button>
-                            </div>
+                                <div className="flex items-center gap-3 mb-5 pb-5 border-b border-black/5 dark:border-white/5">
+                                    <button
+                                        onClick={() => handleToggle(selected)}
+                                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${selected.enabled
+                                            ? 'bg-[#07c160] text-white hover:bg-[#06ad56]'
+                                            : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                                            }`}
+                                    >
+                                        {selected.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+                                        {selected.enabled ? '已启用' : '点击启用'}
+                                    </button>
+                                    <button onClick={() => handleUninstall(selected)} className="flex items-center gap-1 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors">
+                                        <Trash2 className="w-3.5 h-3.5" />卸载
+                                    </button>
+                                </div>
 
-                            {/* File path */}
-                            <div className="flex items-center gap-2 px-3 py-2 mb-5 rounded-md bg-white dark:bg-[#2e2e2e] text-[11px] text-gray-400 font-mono">
-                                <FileText className="w-3 h-3 shrink-0" /><span className="truncate">{selected.path}</span>
-                            </div>
+                                <div className="flex items-center gap-2 px-3 py-2 mb-5 rounded-md bg-white dark:bg-[#2e2e2e] text-[11px] text-gray-400 font-mono">
+                                    <FileText className="w-3 h-3 shrink-0" /><span className="truncate">{selected.path}</span>
+                                </div>
 
-                            {/* Skill body */}
-                            <div className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
-                                {selected.body.split('\n').map((line, i) => {
-                                    if (line.startsWith('# ')) return <h2 key={i} className="text-base font-bold text-gray-800 dark:text-white mt-5 mb-2">{line.slice(2)}</h2>;
-                                    if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-semibold text-gray-700 dark:text-gray-200 mt-4 mb-1.5">{line.slice(3)}</h3>;
-                                    if (line.startsWith('### ')) return <h4 key={i} className="text-sm font-medium text-gray-600 dark:text-gray-300 mt-3 mb-1">{line.slice(4)}</h4>;
-                                    if (line.startsWith('- ')) return <div key={i} className="flex gap-2 ml-2"><span className="text-[#07c160]">•</span><span>{line.slice(2)}</span></div>;
-                                    if (line.trim() === '') return <div key={i} className="h-2" />;
-                                    return <p key={i} className="mb-1">{line}</p>;
-                                })}
+                                <div className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
+                                    {selected.body.split('\n').map((line, i) => {
+                                        if (line.startsWith('# ')) return <h2 key={i} className="text-base font-bold text-gray-800 dark:text-white mt-5 mb-2">{line.slice(2)}</h2>;
+                                        if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-semibold text-gray-700 dark:text-gray-200 mt-4 mb-1.5">{line.slice(3)}</h3>;
+                                        if (line.startsWith('### ')) return <h4 key={i} className="text-sm font-medium text-gray-600 dark:text-gray-300 mt-3 mb-1">{line.slice(4)}</h4>;
+                                        if (line.startsWith('- ')) return <div key={i} className="flex gap-2 ml-2"><span className="text-[#07c160]">•</span><span>{line.slice(2)}</span></div>;
+                                        if (line.trim() === '') return <div key={i} className="h-2" />;
+                                        return <p key={i} className="mb-1">{line}</p>;
+                                    })}
+                                </div>
                             </div>
                         </div>
-                    </div>
+                    ) : (
+                        <div className="flex-1 flex items-center justify-center text-gray-400">
+                            <div className="text-center">
+                                <Puzzle className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                                <p className="text-sm">选择一个技能查看详情</p>
+                            </div>
+                        </div>
+                    )
                 ) : (
-                    <div className="flex-1 flex items-center justify-center text-gray-400">
-                        <div className="text-center">
-                            <Puzzle className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                            <p className="text-sm">选择一个技能查看详情</p>
+                    // Hub asset detail
+                    hubSelected ? (
+                        <div className="flex-1 overflow-y-auto px-8 py-6">
+                            <div className="max-w-2xl">
+                                <div className="flex items-start gap-4 mb-5">
+                                    <div className="w-14 h-14 rounded-xl bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center shrink-0">
+                                        <Globe size={28} className="text-blue-500" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">{hubSelected.name}</h2>
+                                            <span className="text-xs text-gray-400">v{hubSelected.version}</span>
+                                            {hubSelected.promoted && (
+                                                <span className="flex items-center gap-0.5 text-[10px] bg-amber-50 dark:bg-amber-900/20 text-amber-600 px-1.5 py-0.5 rounded">
+                                                    <Star size={10} className="fill-amber-400 text-amber-400" /> 推荐
+                                                </span>
+                                            )}
+                                        </div>
+                                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{hubSelected.description}</p>
+                                        <div className="flex items-center gap-3 text-xs text-gray-400">
+                                            <span className="flex items-center gap-1"><User className="w-3 h-3" />{hubSelected.author || '未知'}</span>
+                                            {hubSelected.tags && <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{hubSelected.tags}</span>}
+                                            <span className="flex items-center gap-1"><Download className="w-3 h-3" />{hubSelected.downloads || 0} 次下载</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex items-center gap-3 mb-5 pb-5 border-b border-black/5 dark:border-white/5">
+                                    <button
+                                        onClick={async () => {
+                                            // Install from hub: try to use Git URL or save content directly
+                                            setToast(`正在安装 "${hubSelected.name}"...`);
+                                            try {
+                                                if (hubSelected.content) {
+                                                    // Create skill from content
+                                                    const safeName = hubSelected.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                                                    await invoke<string>('skills_create', { name: safeName });
+                                                    await invoke('workspace_write_file', { name: `skills/${safeName}/SKILL.md`, content: hubSelected.content });
+                                                    setToast(`"${hubSelected.name}" 已安装`);
+                                                    setTab('local');
+                                                    await loadSkills();
+                                                } else {
+                                                    setToast(`"${hubSelected.name}" 无可安装内容`);
+                                                }
+                                            } catch (e: any) { setError(String(e)); }
+                                        }}
+                                        className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium bg-[#07c160] text-white hover:bg-[#06ad56] transition-colors"
+                                    >
+                                        <Download className="w-4 h-4" />安装到本地
+                                    </button>
+                                </div>
+
+                                {hubSelected.content && (
+                                    <div className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
+                                        {hubSelected.content.split('\n').map((line, i) => {
+                                            if (line.startsWith('# ')) return <h2 key={i} className="text-base font-bold text-gray-800 dark:text-white mt-5 mb-2">{line.slice(2)}</h2>;
+                                            if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-semibold text-gray-700 dark:text-gray-200 mt-4 mb-1.5">{line.slice(3)}</h3>;
+                                            if (line.startsWith('### ')) return <h4 key={i} className="text-sm font-medium text-gray-600 dark:text-gray-300 mt-3 mb-1">{line.slice(4)}</h4>;
+                                            if (line.startsWith('- ')) return <div key={i} className="flex gap-2 ml-2"><span className="text-[#07c160]">•</span><span>{line.slice(2)}</span></div>;
+                                            if (line.trim() === '') return <div key={i} className="h-2" />;
+                                            return <p key={i} className="mb-1">{line}</p>;
+                                        })}
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                    </div>
+                    ) : (
+                        <div className="flex-1 flex items-center justify-center text-gray-400">
+                            <div className="text-center">
+                                <Globe className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                                <p className="text-sm">选择一个远程技能查看详情</p>
+                                <p className="text-xs mt-1">从 EvoMap Hub 浏览和安装技能</p>
+                            </div>
+                        </div>
+                    )
                 )}
             </div>
 

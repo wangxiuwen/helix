@@ -3,6 +3,7 @@ import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import CronJobs from './pages/CronJobs';
 import Skills from './pages/Skills';
+import MCP from './pages/MCP';
 import Logs from './pages/Logs';
 import Settings from './pages/Settings';
 import AIChat from './pages/AIChat';
@@ -27,6 +28,10 @@ const router = createBrowserRouter([
       {
         path: 'skills',
         element: <Skills />,
+      },
+      {
+        path: 'mcp',
+        element: <MCP />,
       },
       {
         path: 'logs',

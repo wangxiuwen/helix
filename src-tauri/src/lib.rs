@@ -149,6 +149,17 @@ pub fn run() {
         .setup(|app| {
             info!("Setup starting...");
 
+            // macOS: Position traffic light buttons (close/minimize/maximize)
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_traffic_lights_inset(
+                        tauri::LogicalPosition::new(14.0_f64, 22.0_f64)
+                    );
+                }
+            }
+
             // Initialize database
             if let Err(e) = modules::database::init_db() {
                 error!("Failed to initialize database: {}", e);
