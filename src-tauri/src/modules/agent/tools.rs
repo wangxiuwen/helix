@@ -461,8 +461,8 @@ async fn tool_shell_exec(args: &Value) -> Result<String, String> {
     let code = output.status.code().unwrap_or(-1);
 
     let max = 8000;
-    let stdout_trunc = if stdout.len() > max { &stdout[..max] } else { &stdout };
-    let stderr_trunc = if stderr.len() > max { &stderr[..max] } else { &stderr };
+    let stdout_trunc = if stdout.len() > max { &stdout[..stdout.floor_char_boundary(max)] } else { &stdout };
+    let stderr_trunc = if stderr.len() > max { &stderr[..stderr.floor_char_boundary(max)] } else { &stderr };
 
     Ok(format!(
         "Exit code: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -663,7 +663,7 @@ async fn tool_web_fetch(args: &Value) -> Result<String, String> {
 
     let max = 15000;
     let truncated = body.len() > max;
-    let text = if truncated { &body[..max] } else { &body };
+    let text = if truncated { &body[..body.floor_char_boundary(max)] } else { &body };
 
     Ok(format!(
         "Status: {}\n{}\n{}",

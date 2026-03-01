@@ -4,8 +4,15 @@ import { X, Upload, Check, Dices, ImageIcon, Sparkles } from 'lucide-react';
 import { createAvatar } from '@dicebear/core';
 import { micah, notionists, bottts, adventurer, funEmoji, lorelei } from '@dicebear/collection';
 
+const DEFAULT_PRESETS = Array.from({ length: 11 }).map((_, i) => ({
+    id: `preset-notion-${i}`,
+    title: `预设手绘 ${i + 1}`,
+    url: createAvatar(notionists, { seed: `helix-preset-${i}`, size: 128 }).toDataUri()
+}));
+
 export const BUILT_IN_AVATARS = [
-    { id: 'helix-default', title: 'Helix Default', url: '/helix-logo.png' }
+    { id: 'helix-default', title: 'Helix', url: '/helix-logo.png' },
+    ...DEFAULT_PRESETS
 ];
 
 const AVATAR_STYLES = [
