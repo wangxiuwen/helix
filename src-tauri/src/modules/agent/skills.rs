@@ -352,6 +352,64 @@ pub async fn skills_install_git(url: String) -> Result<String, String> {
     install_from_git(&url)
 }
 
+/// Hub-style URL install: supports skills.sh, skillsmp.com, clawhub.ai, github.com
+/// Converts the URL to a git repo URL and installs via install_from_git.
+#[tauri::command]
+pub async fn skills_hub_install(bundle_url: String) -> Result<serde_json::Value, String> {
+    let url = bundle_url.trim();
+
+    // Determine git URL from hub URL
+    let git_url = if url.contains("github.com") {
+        // Direct GitHub URL — may be tree/main path, convert to .git
+        // e.g. https://github.com/anthropics/skills/tree/main/skills/skill-creator
+        // We need the top-level repo: https://github.com/anthropics/skills.git
+        let parts: Vec<&str> = url.splitn(6, '/').collect();
+        if parts.len() >= 5 {
+            format!("https://github.com/{}/{}.git", parts[3], parts[4])
+        } else {
+            url.to_string()
+        }
+    } else if url.contains("skills.sh") {
+        // https://skills.sh/vercel-labs/skills/find-skills => https://github.com/vercel-labs/skills.git
+        let path = url.replace("https://skills.sh/", "").replace("http://skills.sh/", "");
+        let parts: Vec<&str> = path.splitn(3, '/').collect();
+        if parts.len() >= 2 {
+            format!("https://github.com/{}/{}.git", parts[0], parts[1])
+        } else {
+            return Err("Invalid skills.sh URL format".to_string());
+        }
+    } else if url.contains("skillsmp.com") {
+        // https://skillsmp.com/org/repo => https://github.com/org/repo.git
+        let path = url.replace("https://skillsmp.com/", "").replace("http://skillsmp.com/", "");
+        let parts: Vec<&str> = path.splitn(3, '/').collect();
+        if parts.len() >= 2 {
+            format!("https://github.com/{}/{}.git", parts[0], parts[1])
+        } else {
+            return Err("Invalid skillsmp.com URL format".to_string());
+        }
+    } else if url.contains("clawhub.ai") {
+        // https://clawhub.ai/org/repo => https://github.com/org/repo.git
+        let path = url.replace("https://clawhub.ai/", "").replace("http://clawhub.ai/", "");
+        let parts: Vec<&str> = path.splitn(3, '/').collect();
+        if parts.len() >= 2 {
+            format!("https://github.com/{}/{}.git", parts[0], parts[1])
+        } else {
+            return Err("Invalid clawhub.ai URL format".to_string());
+        }
+    } else {
+        // Treat as direct git URL
+        url.to_string()
+    };
+
+    let name = install_from_git(&git_url)?;
+
+    Ok(serde_json::json!({
+        "installed": true,
+        "name": name,
+        "enabled": true,
+        "source_url": url
+    }))
+}
 #[tauri::command]
 pub async fn skills_open_dir() -> Result<String, String> {
     let skills_dir = ensure_skills_dir()?;

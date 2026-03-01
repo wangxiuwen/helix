@@ -19,7 +19,7 @@ import {
     FileText,
     Globe,
     Download,
-    Star,
+    X,
 } from 'lucide-react';
 
 interface Skill {
@@ -35,19 +35,25 @@ interface Skill {
     homepage: string;
 }
 
-interface EvoAsset {
-    id: string;
-    asset_type: string;
-    name: string;
-    version: string;
-    description: string;
-    author: string;
-    tags: string;
-    content: string;
-    promoted: boolean;
-    downloads: number;
-    created_at: string;
-}
+// Built-in curated skill registry for Skills Hub
+const HUB_SKILLS = [
+    { name: 'web-search', description: '增强的网页搜索与内容抓取', icon: '🔍', author: 'helix', version: '1.0.0', tags: ['search', 'web'], url: '' },
+    { name: 'code-review', description: '自动代码审查与优化建议', icon: '🔬', author: 'helix', version: '1.0.0', tags: ['code', 'review'], url: '' },
+    { name: 'git-assistant', description: 'Git 提交、分支、PR 管理', icon: '🌿', author: 'helix', version: '1.0.0', tags: ['git', 'devops'], url: '' },
+    { name: 'docker-ops', description: 'Docker 容器管理与部署', icon: '🐳', author: 'helix', version: '1.0.0', tags: ['docker', 'devops'], url: '' },
+    { name: 'sql-assistant', description: 'SQL 查询生成与数据库分析', icon: '🗄️', author: 'helix', version: '1.0.0', tags: ['sql', 'database'], url: '' },
+    { name: 'api-tester', description: 'HTTP API 测试与调试', icon: '🌐', author: 'helix', version: '1.0.0', tags: ['api', 'test'], url: '' },
+    { name: 'markdown-writer', description: '文档写作与 Markdown 格式化', icon: '📝', author: 'helix', version: '1.0.0', tags: ['writing', 'docs'], url: '' },
+    { name: 'data-analysis', description: '数据分析与可视化报告', icon: '📊', author: 'helix', version: '1.0.0', tags: ['data', 'analysis'], url: '' },
+    { name: 'translate', description: '多语言翻译与本地化', icon: '🌍', author: 'helix', version: '1.0.0', tags: ['i18n', 'translate'], url: '' },
+];
+
+const SUPPORTED_URL_PREFIXES = [
+    'https://skills.sh/',
+    'https://clawhub.ai/',
+    'https://skillsmp.com/',
+    'https://github.com/',
+];
 
 type TabKey = 'local' | 'hub';
 
@@ -62,16 +68,16 @@ export default function Skills() {
     const [toast, setToast] = useState('');
     const [error, setError] = useState('');
     const [skillsDir, setSkillsDir] = useState('');
-    const [showInstallModal, setShowInstallModal] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
-    const [gitUrl, setGitUrl] = useState('');
     const [newSkillName, setNewSkillName] = useState('');
 
-    // Skills Hub state
-    const [hubAssets, setHubAssets] = useState<EvoAsset[]>([]);
+    // Hub import state
     const [hubSearch, setHubSearch] = useState('');
-    const [hubLoading, setHubLoading] = useState(false);
-    const [hubSelected, setHubSelected] = useState<EvoAsset | null>(null);
+    const [importModalOpen, setImportModalOpen] = useState(false);
+    const [importUrl, setImportUrl] = useState('');
+    const [importUrlError, setImportUrlError] = useState('');
+    const [importing, setImporting] = useState(false);
+    const [hubSelected, setHubSelected] = useState<typeof HUB_SKILLS[0] | null>(null);
 
     useEffect(() => {
         if (toast) { const t = setTimeout(() => setToast(''), 3000); return () => clearTimeout(t); }
@@ -91,30 +97,12 @@ export default function Skills() {
                 const updated = list.find(s => s.name === selected.name);
                 if (updated) setSelected(updated);
             }
-        } catch (e: any) {
+        } catch (e: unknown) {
             setError(String(e));
         } finally {
             setLoading(false);
         }
     }, [selected]);
-
-    const loadHubAssets = useCallback(async () => {
-        setHubLoading(true);
-        try {
-            const assets = await invoke<EvoAsset[]>('evomap_fetch', { assetType: 'skill' });
-            setHubAssets(assets);
-        } catch (e: any) {
-            // Fallback: try local assets
-            try {
-                const assets = await invoke<EvoAsset[]>('evomap_list_assets', { assetType: 'skill', limit: 50 });
-                setHubAssets(assets);
-            } catch {
-                setError('Skills Hub 暂不可用: ' + String(e));
-            }
-        } finally {
-            setHubLoading(false);
-        }
-    }, []);
 
     useEffect(() => {
         loadSkills();
@@ -122,16 +110,10 @@ export default function Skills() {
 
         let unlisten: (() => void) | null = null;
         import('@tauri-apps/api/event').then(({ listen }) => {
-            listen<any>('skills-changed', () => { loadSkills(); }).then(fn => { unlisten = fn; });
+            listen<unknown>('skills-changed', () => { loadSkills(); }).then(fn => { unlisten = fn; });
         });
         return () => { if (unlisten) unlisten(); };
     }, []);
-
-    useEffect(() => {
-        if (tab === 'hub' && hubAssets.length === 0) {
-            loadHubAssets();
-        }
-    }, [tab, hubAssets.length, loadHubAssets]);
 
     const handleToggle = async (skill: Skill) => {
         try {
@@ -140,11 +122,11 @@ export default function Skills() {
             setSkills(prev => prev.map(s => s.name === skill.name ? updated : s));
             if (selected?.name === skill.name) setSelected(updated);
             setToast(`${skill.icon} ${skill.name} ${!skill.enabled ? '已启用' : '已禁用'}`);
-        } catch (e: any) { setError(String(e)); }
+        } catch (e: unknown) { setError(String(e)); }
     };
 
     const handleOpenDir = async () => {
-        try { await invoke('skills_open_dir'); } catch (e: any) { setError(String(e)); }
+        try { await invoke('skills_open_dir'); } catch (e: unknown) { setError(String(e)); }
     };
 
     const handleCreate = async () => {
@@ -156,19 +138,7 @@ export default function Skills() {
             setShowCreateModal(false);
             setNewSkillName('');
             await loadSkills();
-        } catch (e: any) { setError(String(e)); }
-    };
-
-    const handleInstallGit = async () => {
-        if (!gitUrl.trim()) return;
-        setLoading(true);
-        try {
-            const name = await invoke<string>('skills_install_git', { url: gitUrl.trim() });
-            setToast(`技能 "${name}" 安装成功`);
-            setShowInstallModal(false);
-            setGitUrl('');
-            await loadSkills();
-        } catch (e: any) { setError(String(e)); } finally { setLoading(false); }
+        } catch (e: unknown) { setError(String(e)); }
     };
 
     const handleUninstall = async (skill: Skill) => {
@@ -178,7 +148,45 @@ export default function Skills() {
             setToast(`技能 "${skill.name}" 已卸载`);
             if (selected?.name === skill.name) setSelected(null);
             await loadSkills();
-        } catch (e: any) { setError(String(e)); }
+        } catch (e: unknown) { setError(String(e)); }
+    };
+
+    // Hub URL import (CoPaw pattern)
+    const isSupportedUrl = (url: string) => SUPPORTED_URL_PREFIXES.some(p => url.startsWith(p));
+
+    const handleImportUrlChange = (val: string) => {
+        setImportUrl(val);
+        const trimmed = val.trim();
+        if (trimmed && !isSupportedUrl(trimmed)) {
+            setImportUrlError('不支持的 URL 来源，请使用 skills.sh / clawhub.ai / skillsmp.com / github.com');
+        } else {
+            setImportUrlError('');
+        }
+    };
+
+    const handleHubInstall = async () => {
+        if (importing) return;
+        const trimmed = importUrl.trim();
+        if (!trimmed || !isSupportedUrl(trimmed)) return;
+
+        setImporting(true);
+        try {
+            const result = await invoke<{ installed: boolean; name: string }>('skills_hub_install', { bundleUrl: trimmed });
+            if (result?.installed) {
+                setToast(`技能 "${result.name}" 安装成功`);
+                setImportModalOpen(false);
+                setImportUrl('');
+                setImportUrlError('');
+                setTab('local');
+                await loadSkills();
+            } else {
+                setError('安装失败');
+            }
+        } catch (e: unknown) {
+            setError(String(e));
+        } finally {
+            setImporting(false);
+        }
     };
 
     const filtered = skills.filter(s =>
@@ -187,16 +195,16 @@ export default function Skills() {
         s.tags.some(t => t.toLowerCase().includes(search.toLowerCase()))
     );
 
-    const filteredHub = hubAssets.filter(a =>
-        !hubSearch || a.name.toLowerCase().includes(hubSearch.toLowerCase()) ||
-        a.description.toLowerCase().includes(hubSearch.toLowerCase())
+    const filteredHub = HUB_SKILLS.filter(s =>
+        !hubSearch || s.name.toLowerCase().includes(hubSearch.toLowerCase()) ||
+        s.description.toLowerCase().includes(hubSearch.toLowerCase())
     );
 
     const enabledCount = skills.filter(s => s.enabled).length;
 
     return (
         <>
-            {/* Left: list panel */}
+            {/* Left sidebar */}
             <div className="w-[250px] shrink-0 bg-[#f7f7f7] dark:bg-[#252525] flex flex-col border-r border-black/5 dark:border-white/5">
                 {/* Tab switcher */}
                 <div className="px-3 pt-4 pb-2">
@@ -218,7 +226,6 @@ export default function Skills() {
 
                 {tab === 'local' ? (
                     <>
-                        {/* Local header */}
                         <div className="px-3 pb-1">
                             <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs text-gray-400">{skills.length} 个技能 · {enabledCount} 已启用</span>
@@ -233,33 +240,19 @@ export default function Skills() {
                             </div>
                             <div className="relative">
                                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                                <input
-                                    type="text"
-                                    value={search}
-                                    onChange={e => setSearch(e.target.value)}
-                                    placeholder="搜索技能..."
-                                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400"
-                                />
+                                <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索技能..."
+                                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400" />
                             </div>
                         </div>
 
-                        {/* Local skill list */}
                         <div className="flex-1 overflow-y-auto">
                             {filtered.length === 0 ? (
                                 <div className="px-4 py-12 text-center text-gray-400 text-xs">没有找到技能</div>
                             ) : (
                                 filtered.map(skill => (
-                                    <div
-                                        key={skill.name}
-                                        onClick={() => setSelected(skill)}
-                                        className={`flex items-center px-3 py-3 cursor-pointer transition-colors group ${selected?.name === skill.name
-                                            ? 'bg-[#c9c9c9] dark:bg-[#383838]'
-                                            : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'
-                                            }`}
-                                    >
-                                        <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-[#404040] flex items-center justify-center shrink-0 mr-3 text-lg">
-                                            {skill.icon || '🧩'}
-                                        </div>
+                                    <div key={skill.name} onClick={() => setSelected(skill)}
+                                        className={`flex items-center px-3 py-3 cursor-pointer transition-colors ${selected?.name === skill.name ? 'bg-[#c9c9c9] dark:bg-[#383838]' : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'}`}>
+                                        <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-[#404040] flex items-center justify-center shrink-0 mr-3 text-lg">{skill.icon || '🧩'}</div>
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{skill.name}</span>
@@ -279,72 +272,54 @@ export default function Skills() {
                     </>
                 ) : (
                     <>
-                        {/* Hub header */}
                         <div className="px-3 pb-1">
                             <div className="flex items-center justify-between mb-2">
-                                <span className="text-xs text-gray-400">{hubAssets.length} 个远程技能</span>
-                                <button onClick={loadHubAssets} disabled={hubLoading} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="刷新">
-                                    <RefreshCw className={`w-3.5 h-3.5 ${hubLoading ? 'animate-spin' : ''}`} />
+                                <span className="text-xs text-gray-400">Skills Hub</span>
+                                <button onClick={() => setImportModalOpen(true)} className="flex items-center gap-1 text-xs text-[#07c160] hover:underline">
+                                    <Download size={12} />导入
                                 </button>
                             </div>
                             <div className="relative">
                                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                                <input
-                                    type="text"
-                                    value={hubSearch}
-                                    onChange={e => setHubSearch(e.target.value)}
-                                    placeholder="搜索 Skills Hub..."
-                                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400"
-                                />
+                                <input type="text" value={hubSearch} onChange={e => setHubSearch(e.target.value)} placeholder="搜索 Skills Hub..."
+                                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400" />
                             </div>
                         </div>
 
-                        {/* Hub asset list */}
                         <div className="flex-1 overflow-y-auto">
-                            {hubLoading ? (
-                                <div className="flex items-center justify-center py-12 text-gray-400">
-                                    <Loader2 className="w-5 h-5 animate-spin" />
-                                </div>
-                            ) : filteredHub.length === 0 ? (
-                                <div className="px-4 py-12 text-center text-gray-400 text-xs">
-                                    <Globe className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                                    <p>暂无远程技能</p>
-                                    <p className="mt-1 text-[10px]">点击刷新检查 EvoMap Hub</p>
-                                </div>
-                            ) : (
-                                filteredHub.map(asset => (
-                                    <div
-                                        key={asset.id}
-                                        onClick={() => setHubSelected(asset)}
-                                        className={`flex items-center px-3 py-3 cursor-pointer transition-colors ${hubSelected?.id === asset.id
-                                            ? 'bg-[#c9c9c9] dark:bg-[#383838]'
-                                            : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'
-                                            }`}
-                                    >
-                                        <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center shrink-0 mr-3">
-                                            <Globe size={18} className="text-blue-500" />
+                            {filteredHub.map(skill => (
+                                <div key={skill.name} onClick={() => setHubSelected(skill)}
+                                    className={`flex items-center px-3 py-3 cursor-pointer transition-colors ${hubSelected?.name === skill.name ? 'bg-[#c9c9c9] dark:bg-[#383838]' : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'}`}>
+                                    <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center shrink-0 mr-3 text-lg">{skill.icon}</div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{skill.name}</span>
+                                            <span className="text-[10px] text-gray-400 shrink-0 ml-2">v{skill.version}</span>
                                         </div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center justify-between">
-                                                <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{asset.name}</span>
-                                                <span className="text-[10px] text-gray-400 shrink-0 ml-2">v{asset.version}</span>
-                                            </div>
-                                            <div className="flex items-center gap-1.5 mt-0.5">
-                                                <p className="text-xs text-gray-400 truncate flex-1">{asset.description}</p>
-                                                {asset.promoted && (
-                                                    <Star size={10} className="text-amber-400 fill-amber-400 shrink-0" />
-                                                )}
-                                            </div>
-                                        </div>
+                                        <p className="text-xs text-gray-400 truncate mt-0.5">{skill.description}</p>
                                     </div>
-                                ))
-                            )}
+                                </div>
+                            ))}
+
+                            {/* Import from URL section */}
+                            <div className="px-3 py-4 border-t border-black/5 dark:border-white/5 mt-2">
+                                <button onClick={() => setImportModalOpen(true)}
+                                    className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 text-gray-400 hover:text-[#07c160] hover:border-[#07c160] transition-colors">
+                                    <Download size={16} />
+                                    <span className="text-xs">从 URL 导入技能</span>
+                                </button>
+                                <div className="mt-2 text-[10px] text-gray-400 space-y-0.5">
+                                    <p>支持以下来源：</p>
+                                    <p className="text-gray-500">• skills.sh &nbsp;• clawhub.ai</p>
+                                    <p className="text-gray-500">• skillsmp.com &nbsp;• github.com</p>
+                                </div>
+                            </div>
                         </div>
                     </>
                 )}
             </div>
 
-            {/* Right: detail panel */}
+            {/* Right panel */}
             <div className="flex-1 flex flex-col min-w-0 bg-[#f5f5f5] dark:bg-[#1e1e1e]">
                 {/* Notifications */}
                 {(error || toast) && (
@@ -372,16 +347,15 @@ export default function Skills() {
                             <button onClick={handleOpenDir} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1" title={skillsDir}>
                                 <FolderOpen className="w-3.5 h-3.5" />打开目录
                             </button>
-                            <button onClick={() => setShowInstallModal(true)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1">
-                                <GitBranch className="w-3.5 h-3.5" />Git 安装
+                            <button onClick={() => setImportModalOpen(true)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1">
+                                <GitBranch className="w-3.5 h-3.5" />导入技能
                             </button>
                         </div>
                     )}
                 </div>
 
-                {/* Detail Content */}
+                {/* Detail content */}
                 {tab === 'local' ? (
-                    // Local skill detail
                     selected ? (
                         <div className="flex-1 overflow-y-auto px-8 py-6">
                             <div className="max-w-2xl">
@@ -406,13 +380,8 @@ export default function Skills() {
                                 </div>
 
                                 <div className="flex items-center gap-3 mb-5 pb-5 border-b border-black/5 dark:border-white/5">
-                                    <button
-                                        onClick={() => handleToggle(selected)}
-                                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${selected.enabled
-                                            ? 'bg-[#07c160] text-white hover:bg-[#06ad56]'
-                                            : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-                                            }`}
-                                    >
+                                    <button onClick={() => handleToggle(selected)}
+                                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${selected.enabled ? 'bg-[#07c160] text-white hover:bg-[#06ad56]' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}>
                                         {selected.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
                                         {selected.enabled ? '已启用' : '点击启用'}
                                     </button>
@@ -446,97 +415,125 @@ export default function Skills() {
                         </div>
                     )
                 ) : (
-                    // Hub asset detail
                     hubSelected ? (
                         <div className="flex-1 overflow-y-auto px-8 py-6">
                             <div className="max-w-2xl">
                                 <div className="flex items-start gap-4 mb-5">
-                                    <div className="w-14 h-14 rounded-xl bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center shrink-0">
-                                        <Globe size={28} className="text-blue-500" />
-                                    </div>
+                                    <span className="text-4xl">{hubSelected.icon}</span>
                                     <div className="flex-1">
                                         <div className="flex items-center gap-2 mb-1">
                                             <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">{hubSelected.name}</h2>
                                             <span className="text-xs text-gray-400">v{hubSelected.version}</span>
-                                            {hubSelected.promoted && (
-                                                <span className="flex items-center gap-0.5 text-[10px] bg-amber-50 dark:bg-amber-900/20 text-amber-600 px-1.5 py-0.5 rounded">
-                                                    <Star size={10} className="fill-amber-400 text-amber-400" /> 推荐
-                                                </span>
-                                            )}
                                         </div>
                                         <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{hubSelected.description}</p>
                                         <div className="flex items-center gap-3 text-xs text-gray-400">
-                                            <span className="flex items-center gap-1"><User className="w-3 h-3" />{hubSelected.author || '未知'}</span>
-                                            {hubSelected.tags && <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{hubSelected.tags}</span>}
-                                            <span className="flex items-center gap-1"><Download className="w-3 h-3" />{hubSelected.downloads || 0} 次下载</span>
+                                            <span className="flex items-center gap-1"><User className="w-3 h-3" />{hubSelected.author}</span>
+                                            <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{hubSelected.tags.join(', ')}</span>
                                         </div>
                                     </div>
                                 </div>
 
-                                <div className="flex items-center gap-3 mb-5 pb-5 border-b border-black/5 dark:border-white/5">
-                                    <button
-                                        onClick={async () => {
-                                            // Install from hub: try to use Git URL or save content directly
-                                            setToast(`正在安装 "${hubSelected.name}"...`);
-                                            try {
-                                                if (hubSelected.content) {
-                                                    // Create skill from content
-                                                    const safeName = hubSelected.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-                                                    await invoke<string>('skills_create', { name: safeName });
-                                                    await invoke('workspace_write_file', { name: `skills/${safeName}/SKILL.md`, content: hubSelected.content });
-                                                    setToast(`"${hubSelected.name}" 已安装`);
-                                                    setTab('local');
-                                                    await loadSkills();
-                                                } else {
-                                                    setToast(`"${hubSelected.name}" 无可安装内容`);
-                                                }
-                                            } catch (e: any) { setError(String(e)); }
-                                        }}
-                                        className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium bg-[#07c160] text-white hover:bg-[#06ad56] transition-colors"
-                                    >
-                                        <Download className="w-4 h-4" />安装到本地
-                                    </button>
-                                </div>
-
-                                {hubSelected.content && (
-                                    <div className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
-                                        {hubSelected.content.split('\n').map((line, i) => {
-                                            if (line.startsWith('# ')) return <h2 key={i} className="text-base font-bold text-gray-800 dark:text-white mt-5 mb-2">{line.slice(2)}</h2>;
-                                            if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-semibold text-gray-700 dark:text-gray-200 mt-4 mb-1.5">{line.slice(3)}</h3>;
-                                            if (line.startsWith('### ')) return <h4 key={i} className="text-sm font-medium text-gray-600 dark:text-gray-300 mt-3 mb-1">{line.slice(4)}</h4>;
-                                            if (line.startsWith('- ')) return <div key={i} className="flex gap-2 ml-2"><span className="text-[#07c160]">•</span><span>{line.slice(2)}</span></div>;
-                                            if (line.trim() === '') return <div key={i} className="h-2" />;
-                                            return <p key={i} className="mb-1">{line}</p>;
-                                        })}
+                                <div className="p-4 rounded-xl bg-blue-50/50 dark:bg-blue-900/10 mb-5">
+                                    <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">
+                                        此技能可通过以下方式安装：
+                                    </p>
+                                    <div className="space-y-2">
+                                        {hubSelected.url && (
+                                            <button onClick={() => { setImportUrl(hubSelected.url); setImportModalOpen(true); }}
+                                                className="flex items-center gap-2 px-4 py-2 bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg text-sm transition-colors">
+                                                <Download size={14} />一键安装
+                                            </button>
+                                        )}
+                                        <button onClick={() => setImportModalOpen(true)}
+                                            className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-[#2e2e2e] hover:bg-gray-50 dark:hover:bg-[#383838] rounded-lg text-sm text-gray-700 dark:text-gray-200 transition-colors">
+                                            <Globe size={14} />从 URL 导入
+                                        </button>
                                     </div>
-                                )}
+                                </div>
                             </div>
                         </div>
                     ) : (
                         <div className="flex-1 flex items-center justify-center text-gray-400">
-                            <div className="text-center">
+                            <div className="text-center max-w-sm">
                                 <Globe className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                                <p className="text-sm">选择一个远程技能查看详情</p>
-                                <p className="text-xs mt-1">从 EvoMap Hub 浏览和安装技能</p>
+                                <p className="text-sm mb-2">Skills Hub</p>
+                                <p className="text-xs mb-4">浏览推荐技能，或从 URL 导入</p>
+                                <button onClick={() => setImportModalOpen(true)}
+                                    className="flex items-center gap-2 mx-auto px-4 py-2 bg-[#07c160] hover:bg-[#06ad56] text-white text-sm rounded-lg transition-colors">
+                                    <Download size={14} />导入技能
+                                </button>
+                                <div className="mt-4 text-[11px] text-gray-400/60 space-y-1">
+                                    <p>支持来源</p>
+                                    <p>skills.sh · clawhub.ai · skillsmp.com · github.com</p>
+                                </div>
                             </div>
                         </div>
                     )
                 )}
             </div>
 
-            {/* Install Modal */}
-            {showInstallModal && (
+            {/* Import Modal (CoPaw pattern: URL-based import) */}
+            {importModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                    <div className="bg-white dark:bg-[#2e2e2e] rounded-xl shadow-xl w-[400px] p-5">
-                        <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-1 flex items-center gap-2"><GitBranch className="w-4 h-4 text-[#07c160]" />从 Git 安装技能</h3>
-                        <p className="text-xs text-gray-400 mb-3">输入包含 SKILL.md 的 Git 仓库 URL</p>
-                        <input type="text" value={gitUrl} onChange={e => setGitUrl(e.target.value)} placeholder="https://github.com/user/skill.git"
-                            className="w-full px-3 py-2 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 mb-3"
-                            onKeyDown={e => e.key === 'Enter' && handleInstallGit()} />
-                        <div className="flex justify-end gap-2">
-                            <button onClick={() => { setShowInstallModal(false); setGitUrl(''); }} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md">取消</button>
-                            <button onClick={handleInstallGit} disabled={!gitUrl.trim() || loading} className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md disabled:opacity-50 flex items-center gap-1">
-                                {loading && <Loader2 className="w-3 h-3 animate-spin" />}安装
+                    <div className="bg-white dark:bg-[#2e2e2e] rounded-xl shadow-xl w-[520px] p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                                <Download className="w-4 h-4 text-[#07c160]" />导入技能
+                            </h3>
+                            <button onClick={() => { if (!importing) { setImportModalOpen(false); setImportUrl(''); setImportUrlError(''); } }}
+                                className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10">
+                                <X size={16} className="text-gray-400" />
+                            </button>
+                        </div>
+
+                        <div className="mb-4 p-3 rounded-lg bg-[#f7f7f7] dark:bg-[#3a3a3a] text-xs text-gray-500 dark:text-gray-400">
+                            <p className="font-medium text-gray-600 dark:text-gray-300 mb-1">支持的 URL 来源：</p>
+                            <ul className="space-y-0.5 ml-3">
+                                <li>• https://skills.sh/</li>
+                                <li>• https://clawhub.ai/</li>
+                                <li>• https://skillsmp.com/</li>
+                                <li>• https://github.com/</li>
+                            </ul>
+                            <p className="font-medium text-gray-600 dark:text-gray-300 mt-2 mb-1">URL 示例：</p>
+                            <ul className="space-y-0.5 ml-3 text-[11px]">
+                                <li>• https://skills.sh/vercel-labs/skills/find-skills</li>
+                                <li>• https://github.com/anthropics/skills/tree/main/skills/skill-creator</li>
+                            </ul>
+                        </div>
+
+                        <input
+                            type="text"
+                            value={importUrl}
+                            onChange={e => handleImportUrlChange(e.target.value)}
+                            placeholder="输入技能 URL..."
+                            disabled={importing}
+                            className="w-full px-3 py-2.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-lg border-0 outline-none text-gray-700 dark:text-gray-200 mb-2"
+                            onKeyDown={e => e.key === 'Enter' && handleHubInstall()}
+                        />
+
+                        {importUrlError && (
+                            <p className="text-xs text-red-500 mb-2 flex items-center gap-1">
+                                <AlertCircle size={12} />{importUrlError}
+                            </p>
+                        )}
+
+                        {importing && (
+                            <p className="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                                <Loader2 size={12} className="animate-spin" />正在导入...
+                            </p>
+                        )}
+
+                        <div className="flex justify-end gap-2 mt-3">
+                            <button onClick={() => { if (!importing) { setImportModalOpen(false); setImportUrl(''); setImportUrlError(''); } }}
+                                disabled={importing}
+                                className="px-4 py-2 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-40">
+                                取消
+                            </button>
+                            <button onClick={handleHubInstall}
+                                disabled={importing || !importUrl.trim() || !!importUrlError}
+                                className="px-4 py-2 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg disabled:opacity-40 flex items-center gap-1">
+                                {importing && <Loader2 size={12} className="animate-spin" />}
+                                导入技能
                             </button>
                         </div>
                     </div>

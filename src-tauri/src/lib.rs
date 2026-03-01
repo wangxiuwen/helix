@@ -324,6 +324,7 @@ pub fn run() {
             modules::skills::skills_create,
             modules::skills::skills_uninstall,
             modules::skills::skills_install_git,
+            modules::skills::skills_hub_install,
             modules::skills::skills_open_dir,
             modules::skills::skills_get_dir,
             // Hooks commands
