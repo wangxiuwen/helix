@@ -57,9 +57,83 @@
         "no_provider": "请先在设置中启用 AI 提供商",
         "start": "开始对话",
         "input_placeholder": "输入消息...",
-        "empty_hint": "发送一条消息开始对话"
+        "empty_hint": "发送一条消息开始对话",
+        "search": "搜索",
+        "confirm": "确认",
+        "cancel": "取消",
+        "stop": "停止",
+        "send": "发送",
+        "thinking": "🤔 思考中... (模型: {{model}})",
+        "tool_calling": "🔧 调用工具: {{name}}",
+        "tool_done": "✅ {{name}} 完成 ({{chars}} 字符)",
+        "new_chat": "新对话",
+        "download": "⬇ 下载",
+        "save_as": "⬇ 另存为",
+        "emoji": "表情",
+        "upload_image": "上传图片",
+        "no_provider_selected": "无提供商",
+        "no_providers": "暂无提供商",
+        "select_model": "选择模型",
+        "fetching_models": "获取模型列表中…",
+        "no_models": "无可用模型"
     },
     "settings": {
+        "title": "设置",
+        "groups": {
+            "general": "通用",
+            "agent": "Agent",
+            "other": "其他"
+        },
+        "menu": {
+            "appearance": "外观",
+            "ai_providers": "AI 提供商",
+            "workspace": "工作空间",
+            "mcp": "MCP",
+            "environments": "环境变量",
+            "about": "关于"
+        },
+        "appearance": {
+            "title": "外观设置",
+            "theme": "主题",
+            "theme_desc": "切换明暗主题"
+        },
+        "ai": {
+            "title": "AI 提供商",
+            "add": "添加提供商",
+            "cancel": "取消",
+            "confirm_add": "添加",
+            "custom": "自定义提供商",
+            "name": "名称",
+            "type": "类型",
+            "default_model": "默认模型",
+            "models": "支持的模型",
+            "models_placeholder": "用逗号分隔，如 gpt-4,gpt-3.5",
+            "built_in": "内置",
+            "active": "已启用",
+            "inactive": "未启用"
+        },
+        "workspace": {
+            "title": "工作空间限制",
+            "desc": "设置 Helix 可以访问的本地目录。为了安全，建议只授权特定的项目文件夹。"
+        },
+        "mcp": {
+            "title": "MCP 服务器",
+            "desc": "模型上下文协议 (Model Context Protocol) 允许 AI 模型安全地访问本地工具和数据源。"
+        },
+        "environments": {
+            "title": "环境变量",
+            "add": "添加",
+            "cancel": "取消",
+            "save": "保存",
+            "secret_label": "密钥 (界面脱敏)",
+            "empty": "暂无环境变量"
+        },
+        "about": {
+            "title": "关于",
+            "desc": "AI 驱动的智能体平台",
+            "version": "版本",
+            "stack": "技术栈"
+        },
         "general": {
             "language": "语言"
         }
@@ -99,7 +173,58 @@
         "placeholder_max_ips": "0 表示不限制",
         "placeholder_username": "请输入用户名",
         "hint_curfew": "限制令牌可用时段",
-        "hint_custom_expires": "自定义过期时间",
         "hint_max_ips": "限制使用此令牌的 IP 数量"
+    },
+    "skills": {
+        "title": "Skills",
+        "subtitle": "管理 Agent 技能与能力扩展",
+        "skills_count": "个技能",
+        "enabled_count": "已启用",
+        "open_dir": "打开目录",
+        "import_skill": "导入技能",
+        "create_skill": "创建技能",
+        "local_skills": "本地技能",
+        "hub_skills": "Skills Hub",
+        "search_placeholder": "搜索技能...",
+        "no_match": "没有匹配的技能",
+        "no_skills": "暂无技能",
+        "empty_hint": "点击\"创建技能\"或\"导入技能\"开始",
+        "enabled": "启用",
+        "disabled": "禁用",
+        "no_desc": "暂无描述",
+        "uninstall": "卸载",
+        "search": "搜索...",
+        "install": "安装技能",
+        "view_source": "查看源码",
+        "select_hint1": "从左侧选择技能查看详情",
+        "select_hint2": "或者从 URL 导入自定义技能",
+        "import_from_url": "从 URL 导入",
+        "desc": "描述",
+        "tags": "标签",
+        "homepage": "主页",
+        "path": "路径",
+        "content": "内容",
+        "copy": "复制",
+        "preview": "预览",
+        "import_title": "导入技能",
+        "supported_urls": "支持的 URL 来源：",
+        "url_examples": "URL 示例：",
+        "import_placeholder": "输入技能路径或仓库地址",
+        "importing": "正在导入...",
+        "create_title": "创建技能",
+        "create_hint": "在",
+        "create_hint2": "创建模板",
+        "create_placeholder": "技能名称 (英文, 如 my-skill)",
+        "cancel": "取消",
+        "create_btn": "创建",
+        "confirm_uninstall": "确定要卸载技能 \"{{name}}\" 吗？",
+        "uninstalled_toast": "技能 \"{{name}}\" 已卸载",
+        "created_toast": "技能 \"{{name}}\" 已创建",
+        "install_success_toast": "技能 \"{{name}}\" 安装成功",
+        "install_failed": "安装失败",
+        "copied_toast": "已复制到剪贴板",
+        "enabled_toast": "{{icon}} {{name}} 已启用",
+        "disabled_toast": "{{icon}} {{name}} 已禁用",
+        "hub_source_helix": "Helix 官方源"
     }
 }

@@ -6,10 +6,7 @@ import {
     FolderOpen,
     Plus,
     RefreshCw,
-    GitBranch,
     Trash2,
-    ToggleLeft,
-    ToggleRight,
     Tag,
     User,
     ExternalLink,
@@ -17,7 +14,13 @@ import {
     AlertCircle,
     CheckCircle2,
     FileText,
+    Download,
+    X,
+    Eye,
+    Copy,
+    Globe,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface Skill {
     name: string;
@@ -32,18 +35,104 @@ interface Skill {
     homepage: string;
 }
 
+// Built-in curated skill registry for Skills Hub (matching CoPaw's hub)
+const HUB_SKILLS = [
+    {
+        name: 'web-search', description: '增强的网页搜索与内容抓取能力',
+        icon: '🔍', author: 'helix-team', version: '1.0.0', tags: ['search', 'web'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/web-search',
+        readme: '使 Agent 能够搜索网页并提取关键信息。支持多种搜索引擎和内容解析格式。',
+    },
+    {
+        name: 'code-review', description: '自动代码审查与优化建议',
+        icon: '🔬', author: 'helix-team', version: '1.0.0', tags: ['code', 'review'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/code-review',
+        readme: '对代码进行全面审查，提供安全性、性能和可读性方面的改进建议。',
+    },
+    {
+        name: 'git-assistant', description: 'Git 提交、分支、PR 管理助手',
+        icon: '🌿', author: 'helix-team', version: '1.0.0', tags: ['git', 'devops'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/git-assistant',
+        readme: '帮助管理 Git 工作流，包括提交信息生成、分支策略、PR 描述等。',
+    },
+    {
+        name: 'docker-ops', description: 'Docker 容器管理与部署',
+        icon: '🐳', author: 'helix-team', version: '1.0.0', tags: ['docker', 'devops'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/docker-ops',
+        readme: '管理 Docker 容器和镜像，支持 Compose 文件生成和容器编排。',
+    },
+    {
+        name: 'sql-assistant', description: 'SQL 查询生成与数据库分析',
+        icon: '🗄️', author: 'helix-team', version: '1.0.0', tags: ['sql', 'database'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/sql-assistant',
+        readme: '自动生成复杂 SQL 查询，分析数据库结构并提供优化建议。',
+    },
+    {
+        name: 'api-tester', description: 'HTTP API 测试与调试工具',
+        icon: '🌐', author: 'helix-team', version: '1.0.0', tags: ['api', 'test'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/api-tester',
+        readme: '测试和调试 HTTP API，自动生成测试用例并分析响应结果。',
+    },
+    {
+        name: 'markdown-writer', description: '文档写作与 Markdown 格式化',
+        icon: '📝', author: 'helix-team', version: '1.0.0', tags: ['writing', 'docs'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/markdown-writer',
+        readme: '辅助创建高质量文档，自动格式化 Markdown 并生成目录结构。',
+    },
+    {
+        name: 'data-analysis', description: '数据分析与可视化报告生成',
+        icon: '📊', author: 'helix-team', version: '1.0.0', tags: ['data', 'analysis'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/data-analysis',
+        readme: '分析数据集并生成可视化报告，支持 CSV、JSON 等多种数据格式。',
+    },
+    {
+        name: 'translate', description: '多语言翻译与本地化',
+        icon: '🌍', author: 'helix-team', version: '1.0.0', tags: ['i18n', 'translate'],
+        url: 'https://github.com/helix-ai/skills/tree/main/skills/translate',
+        readme: '支持 100+ 种语言的高质量翻译，保留原文格式和语义。',
+    },
+];
+
+const SUPPORTED_URL_PREFIXES = [
+    'https://skills.sh/',
+    'https://clawhub.ai/',
+    'https://skillsmp.com/',
+    'https://github.com/',
+];
+
+type TabKey = 'local' | 'hub';
+
 export default function Skills() {
+    const { t } = useTranslation();
+    const [tab, setTab] = useState<TabKey>('local');
+
+    // Local skills
     const [skills, setSkills] = useState<Skill[]>([]);
-    const [selected, setSelected] = useState<Skill | null>(null);
-    const [search, setSearch] = useState('');
     const [loading, setLoading] = useState(false);
     const [toast, setToast] = useState('');
     const [error, setError] = useState('');
     const [skillsDir, setSkillsDir] = useState('');
-    const [showInstallModal, setShowInstallModal] = useState(false);
+    const [search, setSearch] = useState('');
+
+    // Drawer
+    const [drawerSkill, setDrawerSkill] = useState<Skill | null>(null);
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [showPreview, setShowPreview] = useState(true);
+
+    // Hub
+    const [hubSearch, setHubSearch] = useState('');
+    const [hubSelected, setHubSelected] = useState<typeof HUB_SKILLS[0] | null>(null);
+
+    // Modals
     const [showCreateModal, setShowCreateModal] = useState(false);
-    const [gitUrl, setGitUrl] = useState('');
     const [newSkillName, setNewSkillName] = useState('');
+    const [importModalOpen, setImportModalOpen] = useState(false);
+    const [importPrefix, setImportPrefix] = useState('https://skills.sh/');
+    const [importPath, setImportPath] = useState('');
+    const [importUrlError, setImportUrlError] = useState('');
+    const [importing, setImporting] = useState(false);
+
+    const [hubSource, setHubSource] = useState('helix');
 
     useEffect(() => {
         if (toast) { const t = setTimeout(() => setToast(''), 3000); return () => clearTimeout(t); }
@@ -57,259 +146,449 @@ export default function Skills() {
         try {
             const list = await invoke<Skill[]>('skills_list');
             setSkills(list);
-            if (list.length > 0 && (!selected || !list.find(s => s.name === selected.name))) {
-                setSelected(list[0]);
-            } else if (selected) {
-                const updated = list.find(s => s.name === selected.name);
-                if (updated) setSelected(updated);
+            if (drawerSkill) {
+                const updated = list.find(s => s.name === drawerSkill.name);
+                if (updated) setDrawerSkill(updated);
             }
-        } catch (e: any) {
-            setError(String(e));
-        } finally {
-            setLoading(false);
-        }
-    }, [selected]);
+        } catch (e: unknown) { setError(String(e)); }
+        finally { setLoading(false); }
+    }, [drawerSkill]);
 
     useEffect(() => {
         loadSkills();
         invoke<string>('skills_get_dir').then(setSkillsDir).catch(() => { });
+        let unlisten: (() => void) | null = null;
+        import('@tauri-apps/api/event').then(({ listen }) => {
+            listen<unknown>('skills-changed', () => loadSkills()).then(fn => { unlisten = fn; });
+        });
+        return () => { if (unlisten) unlisten(); };
     }, []);
 
-    const handleToggle = async (skill: Skill) => {
+    const handleToggle = async (skill: Skill, e?: React.MouseEvent) => {
+        e?.stopPropagation();
         try {
             await invoke('skills_toggle', { name: skill.name, enabled: !skill.enabled });
             const updated = { ...skill, enabled: !skill.enabled };
             setSkills(prev => prev.map(s => s.name === skill.name ? updated : s));
-            if (selected?.name === skill.name) setSelected(updated);
-            setToast(`${skill.icon} ${skill.name} ${!skill.enabled ? '已启用' : '已禁用'}`);
-        } catch (e: any) { setError(String(e)); }
+            if (drawerSkill?.name === skill.name) setDrawerSkill(updated);
+            setToast(t(skill.enabled ? 'skills.disabled_toast' : 'skills.enabled_toast', { icon: skill.icon, name: skill.name }));
+        } catch (e: unknown) { setError(String(e)); }
     };
 
-    const handleOpenDir = async () => {
-        try { await invoke('skills_open_dir'); } catch (e: any) { setError(String(e)); }
+    const handleDelete = async (skill: Skill, e?: React.MouseEvent) => {
+        e?.stopPropagation();
+        if (!confirm(t('skills.confirm_uninstall', { name: skill.name }))) return;
+        try {
+            await invoke('skills_uninstall', { name: skill.name });
+            setToast(t('skills.uninstalled_toast', { name: skill.name }));
+            if (drawerSkill?.name === skill.name) { setDrawerOpen(false); setDrawerSkill(null); }
+            await loadSkills();
+        } catch (e: unknown) { setError(String(e)); }
     };
+
+    const handleOpenDir = async () => { try { await invoke('skills_open_dir'); } catch (e: unknown) { setError(String(e)); } };
 
     const handleCreate = async () => {
         if (!newSkillName.trim()) return;
         const safeName = newSkillName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
         try {
             await invoke<string>('skills_create', { name: safeName });
-            setToast(`技能 "${safeName}" 已创建`);
+            setToast(t('skills.created_toast', { name: safeName }));
             setShowCreateModal(false);
             setNewSkillName('');
             await loadSkills();
-        } catch (e: any) { setError(String(e)); }
+        } catch (e: unknown) { setError(String(e)); }
     };
 
-    const handleInstallGit = async () => {
-        if (!gitUrl.trim()) return;
-        setLoading(true);
+    const handleHubInstall = async () => {
+        if (importing) return;
+        const fullUrl = importPrefix + importPath;
+        const trimmed = fullUrl.trim();
+        if (!importPath.trim()) return;
+        setImporting(true);
         try {
-            const name = await invoke<string>('skills_install_git', { url: gitUrl.trim() });
-            setToast(`技能 "${name}" 安装成功`);
-            setShowInstallModal(false);
-            setGitUrl('');
-            await loadSkills();
-        } catch (e: any) { setError(String(e)); } finally { setLoading(false); }
+            const result = await invoke<{ installed: boolean; name: string }>('skills_hub_install', { bundleUrl: trimmed });
+            if (result?.installed) {
+                setToast(t('skills.install_success_toast', { name: result.name }));
+                setImportModalOpen(false);
+                setImportPath('');
+                setImportUrlError('');
+                setTab('local');
+                await loadSkills();
+            } else { setError(t('skills.install_failed')); }
+        } catch (e: unknown) { setError(String(e)); }
+        finally { setImporting(false); }
     };
 
-    const handleUninstall = async (skill: Skill) => {
-        if (!confirm(`确定要卸载技能 "${skill.name}" 吗？`)) return;
-        try {
-            await invoke('skills_uninstall', { name: skill.name });
-            setToast(`技能 "${skill.name}" 已卸载`);
-            if (selected?.name === skill.name) setSelected(null);
-            await loadSkills();
-        } catch (e: any) { setError(String(e)); }
-    };
+    const handleCopyBody = (body: string) => { navigator.clipboard.writeText(body); setToast(t('skills.copied_toast')); };
+
+    const openDrawer = (skill: Skill) => { setDrawerSkill(skill); setDrawerOpen(true); };
 
     const filtered = skills.filter(s =>
         !search || s.name.toLowerCase().includes(search.toLowerCase()) ||
         s.description.toLowerCase().includes(search.toLowerCase()) ||
         s.tags.some(t => t.toLowerCase().includes(search.toLowerCase()))
     );
+    const sorted = [...filtered].sort((a, b) => {
+        if (a.enabled && !b.enabled) return -1;
+        if (!a.enabled && b.enabled) return 1;
+        return a.name.localeCompare(b.name);
+    });
+
+    const filteredHub = HUB_SKILLS.filter(s =>
+        !hubSearch || s.name.toLowerCase().includes(hubSearch.toLowerCase()) ||
+        s.description.toLowerCase().includes(hubSearch.toLowerCase()) ||
+        s.tags.some(t => t.toLowerCase().includes(hubSearch.toLowerCase()))
+    );
 
     const enabledCount = skills.filter(s => s.enabled).length;
 
     return (
-        <>
-            {/* Left: Skill list (same width/style as chat session list) */}
-            <div className="w-[250px] shrink-0 bg-[#f7f7f7] dark:bg-[#252525] flex flex-col border-r border-black/5 dark:border-white/5">
-                {/* Header */}
-                <div className="px-3 pt-4 pb-1">
-                    <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs text-gray-400">{skills.length} 个技能 · {enabledCount} 已启用</span>
-                        <div className="flex items-center gap-1">
-                            <button onClick={loadSkills} disabled={loading} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="刷新">
-                                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                            </button>
-                            <button onClick={() => setShowCreateModal(true)} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-400" title="新建技能">
-                                <Plus className="w-3.5 h-3.5" />
-                            </button>
+        <div className="flex-1 flex flex-col min-w-0 h-full bg-[#FAFBFC] dark:bg-base-300 relative">
+            {/* Notifications */}
+            {(error || toast) && (
+                <div className="absolute top-4 right-4 z-40 max-w-sm space-y-2">
+                    {error && (
+                        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-500 text-xs shadow-lg">
+                            <AlertCircle className="w-4 h-4 shrink-0" />{error}
                         </div>
-                    </div>
-                    <div className="relative">
-                        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                        <input
-                            type="text"
-                            value={search}
-                            onChange={e => setSearch(e.target.value)}
-                            placeholder="搜索技能..."
-                            className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400"
-                        />
-                    </div>
-                </div>
-
-                {/* Skill list */}
-                <div className="flex-1 overflow-y-auto">
-                    {filtered.length === 0 ? (
-                        <div className="px-4 py-12 text-center text-gray-400 text-xs">没有找到技能</div>
-                    ) : (
-                        filtered.map(skill => (
-                            <div
-                                key={skill.name}
-                                onClick={() => setSelected(skill)}
-                                className={`flex items-center px-3 py-3 cursor-pointer transition-colors group ${selected?.name === skill.name
-                                    ? 'bg-[#c9c9c9] dark:bg-[#383838]'
-                                    : 'hover:bg-[#ebebeb] dark:hover:bg-[#303030]'
-                                    }`}
-                            >
-                                <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-[#404040] flex items-center justify-center shrink-0 mr-3 text-lg">
-                                    {skill.icon || '🧩'}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{skill.name}</span>
-                                        <span className="text-[10px] text-gray-400 shrink-0 ml-2">v{skill.version}</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 mt-0.5">
-                                        <p className="text-xs text-gray-400 truncate flex-1">{skill.description}</p>
-                                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${skill.enabled ? 'bg-[#07c160]/10 text-[#07c160]' : 'bg-gray-200 dark:bg-gray-700 text-gray-400'}`}>
-                                            {skill.enabled ? '启用' : '禁用'}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        ))
+                    )}
+                    {toast && (
+                        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-green-50 dark:bg-green-900/30 text-[#07c160] text-xs shadow-lg">
+                            <CheckCircle2 className="w-4 h-4 shrink-0" />{toast}
+                        </div>
                     )}
                 </div>
-            </div>
+            )}
 
-            {/* Right: Skill detail */}
-            <div className="flex-1 flex flex-col min-w-0 bg-[#f5f5f5] dark:bg-[#1e1e1e]">
-                {/* Notifications */}
-                {(error || toast) && (
-                    <div className="px-5 pt-3">
-                        {error && (
-                            <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-red-50 dark:bg-red-900/20 text-red-500 text-xs mb-2">
-                                <AlertCircle className="w-3.5 h-3.5 shrink-0" />{error}
-                            </div>
-                        )}
-                        {toast && (
-                            <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-green-50 dark:bg-green-900/20 text-[#07c160] text-xs">
-                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />{toast}
-                            </div>
-                        )}
+            {/* Header */}
+            <div className="shrink-0 px-8 pt-8 pb-4" data-tauri-drag-region>
+                <div className="flex items-center justify-between mb-4">
+                    <div>
+                        <h1 className="text-xl font-bold text-gray-800 dark:text-white">{t('skills.title')}</h1>
+                        <p className="text-xs text-gray-400 mt-0.5">{t('skills.subtitle')} · {skills.length} {t('skills.skills_count')} · {enabledCount} {t('skills.enabled_count')}</p>
                     </div>
-                )}
-
-                {/* Header bar */}
-                <div className="h-14 px-5 flex items-center justify-between border-b border-black/5 dark:border-white/5 shrink-0" data-tauri-drag-region>
-                    <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                        {selected ? selected.name : '技能管理'}
-                    </h3>
-                    <div className="flex items-center gap-1">
-                        <button onClick={handleOpenDir} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1" title={skillsDir}>
-                            <FolderOpen className="w-3.5 h-3.5" />打开目录
+                    <div className="flex items-center gap-2">
+                        <button onClick={handleOpenDir} className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-colors flex items-center gap-1.5" title={skillsDir}>
+                            <FolderOpen size={14} />{t('skills.open_dir')}
                         </button>
-                        <button onClick={() => setShowInstallModal(true)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors flex items-center gap-1">
-                            <GitBranch className="w-3.5 h-3.5" />Git 安装
+                        <button onClick={() => setImportModalOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#2e2e2e] hover:bg-gray-50 dark:hover:bg-[#383838] text-gray-700 dark:text-gray-200 text-xs rounded-lg transition-colors border border-gray-200 dark:border-gray-700">
+                            <Download size={14} />{t('skills.import_skill')}
+                        </button>
+                        <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-[#07c160] hover:bg-[#06ad56] text-white text-xs rounded-lg transition-colors">
+                            <Plus size={14} />{t('skills.create_skill')}
                         </button>
                     </div>
                 </div>
 
-                {selected ? (
-                    <div className="flex-1 overflow-y-auto px-8 py-6">
-                        <div className="max-w-2xl">
-                            {/* Skill header */}
-                            <div className="flex items-start gap-4 mb-5">
-                                <span className="text-4xl">{selected.icon}</span>
-                                <div className="flex-1">
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">{selected.name}</h2>
-                                        <span className="text-xs text-gray-400">v{selected.version}</span>
-                                    </div>
-                                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{selected.description}</p>
-                                    <div className="flex items-center gap-3 text-xs text-gray-400">
-                                        <span className="flex items-center gap-1"><User className="w-3 h-3" />{selected.author}</span>
-                                        {selected.tags.length > 0 && <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{selected.tags.join(', ')}</span>}
-                                        {selected.homepage && (
-                                            <a href={selected.homepage} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[#07c160] hover:underline">
-                                                <ExternalLink className="w-3 h-3" />主页
-                                            </a>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Actions */}
-                            <div className="flex items-center gap-3 mb-5 pb-5 border-b border-black/5 dark:border-white/5">
-                                <button
-                                    onClick={() => handleToggle(selected)}
-                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${selected.enabled
-                                        ? 'bg-[#07c160] text-white hover:bg-[#06ad56]'
-                                        : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-                                        }`}
-                                >
-                                    {selected.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
-                                    {selected.enabled ? '已启用' : '点击启用'}
-                                </button>
-                                <button onClick={() => handleUninstall(selected)} className="flex items-center gap-1 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors">
-                                    <Trash2 className="w-3.5 h-3.5" />卸载
-                                </button>
-                            </div>
-
-                            {/* File path */}
-                            <div className="flex items-center gap-2 px-3 py-2 mb-5 rounded-md bg-white dark:bg-[#2e2e2e] text-[11px] text-gray-400 font-mono">
-                                <FileText className="w-3 h-3 shrink-0" /><span className="truncate">{selected.path}</span>
-                            </div>
-
-                            {/* Skill body */}
-                            <div className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
-                                {selected.body.split('\n').map((line, i) => {
-                                    if (line.startsWith('# ')) return <h2 key={i} className="text-base font-bold text-gray-800 dark:text-white mt-5 mb-2">{line.slice(2)}</h2>;
-                                    if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-semibold text-gray-700 dark:text-gray-200 mt-4 mb-1.5">{line.slice(3)}</h3>;
-                                    if (line.startsWith('### ')) return <h4 key={i} className="text-sm font-medium text-gray-600 dark:text-gray-300 mt-3 mb-1">{line.slice(4)}</h4>;
-                                    if (line.startsWith('- ')) return <div key={i} className="flex gap-2 ml-2"><span className="text-[#07c160]">•</span><span>{line.slice(2)}</span></div>;
-                                    if (line.trim() === '') return <div key={i} className="h-2" />;
-                                    return <p key={i} className="mb-1">{line}</p>;
-                                })}
-                            </div>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="flex-1 flex items-center justify-center text-gray-400">
-                        <div className="text-center">
-                            <Puzzle className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                            <p className="text-sm">选择一个技能查看详情</p>
-                        </div>
-                    </div>
-                )}
+                {/* Tabs */}
+                <div className="flex items-center gap-1 border-b border-gray-200 dark:border-gray-700">
+                    <button
+                        onClick={() => setTab('local')}
+                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'local' ? 'border-[#07c160] text-[#07c160]' : 'border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}
+                    >
+                        {t('skills.local_skills')}
+                    </button>
+                    <button
+                        onClick={() => setTab('hub')}
+                        className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'hub' ? 'border-[#07c160] text-[#07c160]' : 'border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}
+                    >
+                        <Globe size={14} />{t('skills.hub_skills')}
+                    </button>
+                </div>
             </div>
 
-            {/* Install Modal */}
-            {showInstallModal && (
+            {/* Tab content */}
+            {tab === 'local' ? (
+                <>
+                    <div className="px-8 pb-3">
+                        <div className="flex items-center gap-2">
+                            <div className="relative flex-1 max-w-xs">
+                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder={t('skills.search_placeholder')}
+                                    className="w-full pl-9 pr-3 py-2 text-sm bg-white dark:bg-[#2e2e2e] rounded-lg border border-gray-200 dark:border-gray-700 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400 focus:border-[#07c160] transition-colors" />
+                            </div>
+                            <button onClick={loadSkills} disabled={loading} className="p-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-gray-400 transition-colors" title={t('common.refresh')}>
+                                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto px-8 pb-8">
+                        {sorted.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                                <Puzzle className="w-12 h-12 mb-3 opacity-20" />
+                                <p className="text-sm">{search ? t('skills.no_match') : t('skills.no_skills')}</p>
+                                <p className="text-xs mt-1 opacity-70">{t('skills.empty_hint')}</p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                                {sorted.map(skill => (
+                                    <div key={skill.name} onClick={() => openDrawer(skill)}
+                                        className="group relative p-4 rounded-xl bg-white dark:bg-[#2e2e2e] border border-gray-100 dark:border-gray-800 hover:shadow-md hover:border-gray-200 dark:hover:border-gray-700 cursor-pointer transition-all">
+                                        <div className="flex items-start justify-between mb-3">
+                                            <div className="flex items-center gap-2.5">
+                                                <div className="w-9 h-9 rounded-lg bg-gray-100 dark:bg-[#404040] flex items-center justify-center text-lg shrink-0">{skill.icon || '🧩'}</div>
+                                                <div className="min-w-0">
+                                                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">{skill.name}</h3>
+                                                    <span className="text-[10px] text-gray-400">v{skill.version}</span>
+                                                </div>
+                                            </div>
+                                            <div className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${skill.enabled ? 'bg-[#07c160]/10 text-[#07c160]' : 'bg-gray-100 dark:bg-gray-700 text-gray-400'}`}>
+                                                <span className={`w-1.5 h-1.5 rounded-full ${skill.enabled ? 'bg-[#07c160]' : 'bg-gray-400'}`} />
+                                                {skill.enabled ? t('skills.enabled') : t('skills.disabled')}
+                                            </div>
+                                        </div>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 mb-3 min-h-[2rem]">{skill.description || t('skills.no_desc')}</p>
+                                        {skill.tags.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mb-3">
+                                                {skill.tags.slice(0, 3).map(tag => (
+                                                    <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">{tag}</span>
+                                                ))}
+                                                {skill.tags.length > 3 && <span className="text-[10px] text-gray-400">+{skill.tags.length - 3}</span>}
+                                            </div>
+                                        )}
+                                        <div className="text-[10px] text-gray-400 font-mono truncate mb-3">{skill.path}</div>
+                                        <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-700">
+                                            <span className="text-[10px] text-gray-400 flex items-center gap-1"><User size={10} />{skill.author}</span>
+                                            <div className="flex items-center gap-2">
+                                                <button onClick={(e) => handleDelete(skill, e)} className="text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100" title={t('skills.uninstall')}><Trash2 size={12} /></button>
+                                                <button onClick={(e) => handleToggle(skill, e)}
+                                                    className={`text-xs px-2 py-0.5 rounded transition-colors ${skill.enabled ? 'text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20' : 'text-[#07c160] hover:bg-green-50 dark:hover:bg-green-900/20'}`}>
+                                                    {skill.enabled ? t('skills.disabled') : t('skills.enabled')}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </>
+            ) : (
+                /* Skills Hub tab */
+                <div className="flex flex-1 min-h-0">
+                    {/* Hub sidebar list */}
+                    <div className="w-[260px] shrink-0 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+                        <div className="px-4 py-3">
+                            <select
+                                className="w-full px-2 py-1.5 text-xs bg-gray-100 dark:bg-[#303030] rounded-md outline-none text-gray-700 dark:text-gray-200 mb-2 border-r-[8px] border-transparent"
+                                value={hubSource}
+                                onChange={e => setHubSource(e.target.value)}
+                            >
+                                <option value="helix">{t('skills.hub_source_helix')}</option>
+                                <option value="clawhub">ClawHub</option>
+                                <option value="skillssh">skills.sh</option>
+                            </select>
+                            <div className="relative">
+                                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input type="text" value={hubSearch} onChange={e => setHubSearch(e.target.value)} placeholder={t('skills.search')}
+                                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#2e2e2e] rounded-lg border border-gray-200 dark:border-gray-700 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400" />
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto">
+                            {filteredHub.map(skill => (
+                                <div key={skill.name} onClick={() => setHubSelected(skill)}
+                                    className={`flex items-center px-4 py-3 cursor-pointer transition-colors ${hubSelected?.name === skill.name ? 'bg-[#07c160]/5 border-l-2 border-[#07c160]' : 'hover:bg-gray-50 dark:hover:bg-[#303030] border-l-2 border-transparent'}`}>
+                                    <span className="text-xl mr-3 shrink-0">{skill.icon}</span>
+                                    <div className="min-w-0">
+                                        <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{skill.name}</p>
+                                        <p className="text-xs text-gray-400 truncate">{skill.description}</p>
+                                    </div>
+                                </div>
+                            ))}
+                            {/* Import from URL */}
+                            <div className="px-4 py-3 mt-2 border-t border-gray-200 dark:border-gray-700">
+                                <button onClick={() => setImportModalOpen(true)}
+                                    className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 text-gray-400 hover:text-[#07c160] hover:border-[#07c160] transition-colors text-xs">
+                                    <Download size={14} />{t('skills.import_from_url')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Hub detail */}
+                    <div className="flex-1 overflow-y-auto">
+                        {hubSelected ? (
+                            <div className="px-10 py-8 max-w-2xl">
+                                <div className="flex items-start gap-4 mb-6">
+                                    <span className="text-5xl">{hubSelected.icon}</span>
+                                    <div>
+                                        <h2 className="text-xl font-bold text-gray-800 dark:text-white mb-1">{hubSelected.name}</h2>
+                                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{hubSelected.description}</p>
+                                        <div className="flex items-center gap-3 text-xs text-gray-400">
+                                            <span className="flex items-center gap-1"><User size={11} />{hubSelected.author}</span>
+                                            <span>v{hubSelected.version}</span>
+                                            <span className="flex items-center gap-1"><Tag size={11} />{hubSelected.tags.join(', ')}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <p className="text-sm text-gray-600 dark:text-gray-300 mb-6 p-4 bg-gray-50 dark:bg-[#2e2e2e] rounded-xl leading-relaxed">{hubSelected.readme}</p>
+
+                                <div className="flex items-center gap-3">
+                                    <button onClick={() => {
+                                        const url = hubSelected.url || '';
+                                        const matchedPrefix = SUPPORTED_URL_PREFIXES.find(p => url.startsWith(p));
+                                        if (matchedPrefix) {
+                                            setImportPrefix(matchedPrefix);
+                                            setImportPath(url.slice(matchedPrefix.length));
+                                        } else {
+                                            setImportPath(url);
+                                        }
+                                        setImportModalOpen(true);
+                                    }}
+                                        className="flex items-center gap-2 px-5 py-2.5 bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg text-sm font-medium transition-colors">
+                                        <Download size={15} />{t('skills.install')}
+                                    </button>
+                                    {hubSelected.url && (
+                                        <a href={hubSelected.url} target="_blank" rel="noopener noreferrer"
+                                            className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-[#2e2e2e] hover:bg-gray-50 dark:hover:bg-[#383838] text-gray-700 dark:text-gray-200 rounded-lg text-sm border border-gray-200 dark:border-gray-700 transition-colors">
+                                            <ExternalLink size={14} />{t('skills.view_source')}
+                                        </a>
+                                    )}
+                                </div>
+
+                                <div className="mt-6 text-[11px] text-gray-400 p-3 bg-blue-50 dark:bg-blue-900/10 rounded-lg">
+                                    <p>支持从以下来源安装：skills.sh · clawhub.ai · skillsmp.com · github.com</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                                <Globe className="w-12 h-12 mb-3 opacity-20" />
+                                <p className="text-sm">{t('skills.select_hint1')}</p>
+                                <p className="text-xs mt-1 opacity-70">{t('skills.select_hint2')}</p>
+                                <button onClick={() => setImportModalOpen(true)}
+                                    className="mt-4 flex items-center gap-2 px-4 py-2 bg-[#07c160] hover:bg-[#06ad56] text-white text-sm rounded-lg transition-colors">
+                                    <Download size={14} />{t('skills.import_from_url')}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Skill detail Drawer */}
+            {drawerOpen && drawerSkill && (
+                <>
+                    <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setDrawerOpen(false)} />
+                    <div className="fixed right-0 top-0 bottom-0 z-50 w-[520px] bg-white dark:bg-[#1e1e1e] shadow-2xl flex flex-col" style={{ animation: 'slideInRight 0.22s ease-out' }}>
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+                            <div className="flex items-center gap-3">
+                                <span className="text-2xl">{drawerSkill.icon}</span>
+                                <div>
+                                    <h2 className="text-sm font-bold text-gray-800 dark:text-white">{drawerSkill.name}</h2>
+                                    <span className="text-[10px] text-gray-400">v{drawerSkill.version} · {drawerSkill.author}</span>
+                                </div>
+                            </div>
+                            <button onClick={() => setDrawerOpen(false)} className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><X size={18} className="text-gray-400" /></button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto px-6 py-5">
+                            <div className="space-y-3 mb-5">
+                                <div>
+                                    <label className="text-[10px] text-gray-400 uppercase tracking-wider mb-1 block">{t('skills.desc')}</label>
+                                    <p className="text-sm text-gray-700 dark:text-gray-200">{drawerSkill.description || t('skills.no_desc')}</p>
+                                </div>
+                                {drawerSkill.tags.length > 0 && (
+                                    <div>
+                                        <label className="text-[10px] text-gray-400 uppercase tracking-wider mb-1 block">{t('skills.tags')}</label>
+                                        <div className="flex flex-wrap gap-1">
+                                            {drawerSkill.tags.map(tag => (
+                                                <span key={tag} className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"><Tag size={10} />{tag}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                {drawerSkill.homepage && (
+                                    <div>
+                                        <label className="text-[10px] text-gray-400 uppercase tracking-wider mb-1 block">{t('skills.homepage')}</label>
+                                        <a href={drawerSkill.homepage} target="_blank" rel="noopener noreferrer" className="text-xs text-[#07c160] hover:underline flex items-center gap-1"><ExternalLink size={12} />{drawerSkill.homepage}</a>
+                                    </div>
+                                )}
+                                <div>
+                                    <label className="text-[10px] text-gray-400 uppercase tracking-wider mb-1 block">{t('skills.path')}</label>
+                                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-gray-50 dark:bg-[#2e2e2e] text-[11px] text-gray-400 font-mono"><FileText size={12} /><span className="truncate">{drawerSkill.path}</span></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <label className="text-[10px] text-gray-400 uppercase tracking-wider">{t('skills.content')}</label>
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={() => handleCopyBody(drawerSkill.body)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors" title={t('skills.copy')}><Copy size={14} /></button>
+                                        <button onClick={() => setShowPreview(!showPreview)}
+                                            className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded transition-colors ${showPreview ? 'bg-[#07c160]/10 text-[#07c160]' : 'bg-gray-100 dark:bg-gray-700 text-gray-400'}`}>
+                                            <Eye size={10} />{t('skills.preview')}
+                                        </button>
+                                    </div>
+                                </div>
+                                {showPreview ? (
+                                    <div className="p-4 rounded-lg bg-gray-50 dark:bg-[#2e2e2e] text-sm text-gray-600 dark:text-gray-300 leading-relaxed max-h-[400px] overflow-y-auto">
+                                        {drawerSkill.body.split('\n').map((line, i) => {
+                                            if (line.startsWith('# ')) return <h2 key={i} className="text-base font-bold text-gray-800 dark:text-white mt-4 mb-2">{line.slice(2)}</h2>;
+                                            if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-semibold text-gray-700 dark:text-gray-200 mt-3 mb-1.5">{line.slice(3)}</h3>;
+                                            if (line.startsWith('- ')) return <div key={i} className="flex gap-2 ml-2"><span className="text-[#07c160]">•</span><span>{line.slice(2)}</span></div>;
+                                            if (line.trim() === '') return <div key={i} className="h-2" />;
+                                            return <p key={i} className="mb-1">{line}</p>;
+                                        })}
+                                    </div>
+                                ) : (
+                                    <pre className="p-4 rounded-lg bg-gray-50 dark:bg-[#2e2e2e] text-xs text-gray-600 dark:text-gray-300 font-mono whitespace-pre-wrap max-h-[400px] overflow-y-auto">{drawerSkill.body}</pre>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-800">
+                            <button onClick={() => handleDelete(drawerSkill)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"><Trash2 size={14} />{t('skills.uninstall')}</button>
+                            <button onClick={() => handleToggle(drawerSkill)}
+                                className={`flex items-center gap-1.5 px-4 py-2 text-xs rounded-lg font-medium transition-colors ${drawerSkill.enabled ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300' : 'bg-[#07c160] text-white hover:bg-[#06ad56]'}`}>
+                                {drawerSkill.enabled ? t('skills.disabled') : t('skills.enabled')}
+                            </button>
+                        </div>
+                    </div>
+                </>
+            )}
+
+            {/* Import Modal */}
+            {importModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                    <div className="bg-white dark:bg-[#2e2e2e] rounded-xl shadow-xl w-[400px] p-5">
-                        <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-1 flex items-center gap-2"><GitBranch className="w-4 h-4 text-[#07c160]" />从 Git 安装技能</h3>
-                        <p className="text-xs text-gray-400 mb-3">输入包含 SKILL.md 的 Git 仓库 URL</p>
-                        <input type="text" value={gitUrl} onChange={e => setGitUrl(e.target.value)} placeholder="https://github.com/user/skill.git"
-                            className="w-full px-3 py-2 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 mb-3"
-                            onKeyDown={e => e.key === 'Enter' && handleInstallGit()} />
-                        <div className="flex justify-end gap-2">
-                            <button onClick={() => { setShowInstallModal(false); setGitUrl(''); }} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md">取消</button>
-                            <button onClick={handleInstallGit} disabled={!gitUrl.trim() || loading} className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md disabled:opacity-50 flex items-center gap-1">
-                                {loading && <Loader2 className="w-3 h-3 animate-spin" />}安装
+                    <div className="bg-white dark:bg-[#2e2e2e] rounded-xl shadow-xl w-[520px] p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2"><Download className="w-4 h-4 text-[#07c160]" />{t('skills.import_title')}</h3>
+                            <button onClick={() => { if (!importing) { setImportModalOpen(false); setImportPath(''); setImportUrlError(''); } }} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10"><X size={16} className="text-gray-400" /></button>
+                        </div>
+                        <div className="mb-4 p-3 rounded-lg bg-[#f7f7f7] dark:bg-[#3a3a3a] text-xs text-gray-500 dark:text-gray-400">
+                            <p className="font-medium text-gray-600 dark:text-gray-300 mb-1.5">{t('skills.supported_urls')}</p>
+                            <ul className="space-y-0.5 ml-1">
+                                <li>• https://skills.sh/</li><li>• https://clawhub.ai/</li><li>• https://skillsmp.com/</li><li>• https://github.com/</li>
+                            </ul>
+                            <p className="font-medium text-gray-600 dark:text-gray-300 mt-2.5 mb-1.5">{t('skills.url_examples')}</p>
+                            <ul className="space-y-0.5 ml-1 text-[11px]">
+                                <li>• https://skills.sh/vercel-labs/skills/find-skills</li>
+                                <li>• https://github.com/anthropics/skills/tree/main/skills/skill-creator</li>
+                            </ul>
+                        </div>
+                        <div className="flex gap-2 mb-2">
+                            <select
+                                value={importPrefix}
+                                onChange={e => setImportPrefix(e.target.value)}
+                                disabled={importing}
+                                className="w-[180px] shrink-0 px-3 py-2.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-lg border border-gray-200 dark:border-gray-700 outline-none text-gray-700 dark:text-gray-200 focus:border-[#07c160] transition-colors"
+                            >
+                                <option value="https://skills.sh/">skills.sh/</option>
+                                <option value="https://clawhub.ai/">clawhub.ai/</option>
+                                <option value="https://skillsmp.com/">skillsmp.com/</option>
+                                <option value="https://github.com/">github.com/</option>
+                            </select>
+                            <input type="text" value={importPath} onChange={e => { setImportPath(e.target.value); setImportUrlError(''); }} placeholder={t('skills.import_placeholder')} disabled={importing}
+                                className="flex-1 min-w-0 px-3 py-2.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-lg border border-gray-200 dark:border-gray-700 outline-none text-gray-700 dark:text-gray-200 focus:border-[#07c160] transition-colors"
+                                onKeyDown={e => e.key === 'Enter' && handleHubInstall()} />
+                        </div>
+                        {importUrlError && <p className="text-xs text-red-500 mb-2 flex items-center gap-1"><AlertCircle size={12} />{importUrlError}</p>}
+                        {importing && <p className="text-xs text-gray-400 mb-2 flex items-center gap-1"><Loader2 size={12} className="animate-spin" />{t('skills.importing')}</p>}
+                        <div className="flex justify-end gap-2 mt-3">
+                            <button onClick={() => { if (!importing) { setImportModalOpen(false); setImportPath(''); setImportUrlError(''); } }} disabled={importing} className="px-4 py-2 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-40">{t('skills.cancel')}</button>
+                            <button onClick={handleHubInstall} disabled={importing || !importPath.trim() || !!importUrlError}
+                                className="px-4 py-2 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg disabled:opacity-40 flex items-center gap-1">
+                                {importing && <Loader2 size={12} className="animate-spin" />}{t('skills.import_title')}
                             </button>
                         </div>
                     </div>
@@ -320,18 +599,20 @@ export default function Skills() {
             {showCreateModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
                     <div className="bg-white dark:bg-[#2e2e2e] rounded-xl shadow-xl w-[400px] p-5">
-                        <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-1 flex items-center gap-2"><Plus className="w-4 h-4 text-[#07c160]" />新建自定义技能</h3>
-                        <p className="text-xs text-gray-400 mb-3">在 <code className="text-[11px] bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{skillsDir}</code> 创建模板</p>
-                        <input type="text" value={newSkillName} onChange={e => setNewSkillName(e.target.value)} placeholder="技能名称 (英文, 如 my-skill)"
-                            className="w-full px-3 py-2 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 mb-3"
+                        <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-1 flex items-center gap-2"><Plus className="w-4 h-4 text-[#07c160]" />{t('skills.create_title')}</h3>
+                        <p className="text-xs text-gray-400 mb-3">{t('skills.create_hint')} <code className="text-[11px] bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{skillsDir}</code> {t('skills.create_hint2')}</p>
+                        <input type="text" value={newSkillName} onChange={e => setNewSkillName(e.target.value)} placeholder={t('skills.create_placeholder')}
+                            className="w-full px-3 py-2 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-lg border border-gray-200 dark:border-gray-700 outline-none text-gray-700 dark:text-gray-200 mb-3 focus:border-[#07c160] transition-colors"
                             onKeyDown={e => e.key === 'Enter' && handleCreate()} />
                         <div className="flex justify-end gap-2">
-                            <button onClick={() => { setShowCreateModal(false); setNewSkillName(''); }} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md">取消</button>
-                            <button onClick={handleCreate} disabled={!newSkillName.trim()} className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md disabled:opacity-50">创建</button>
+                            <button onClick={() => { setShowCreateModal(false); setNewSkillName(''); }} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t('skills.cancel')}</button>
+                            <button onClick={handleCreate} disabled={!newSkillName.trim()} className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg disabled:opacity-50">{t('skills.create_btn')}</button>
                         </div>
                     </div>
                 </div>
             )}
-        </>
+
+            <style>{`@keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }`}</style>
+        </div>
     );
 }

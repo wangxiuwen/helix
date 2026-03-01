@@ -24,21 +24,21 @@ static SHARED_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
     });
 
 
-/// Tracks files sent in the current agent session (metadata for response).
-static SENT_FILES: std::sync::LazyLock<Mutex<Vec<Value>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+/// Tracks files sent per agent session (keyed by account_id).
+static SENT_FILES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Vec<Value>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-/// Call at the start of each agent call to reset sent-file tracking.
-pub fn clear_sent_files() {
-    if let Ok(mut files) = SENT_FILES.lock() {
-        files.clear();
+/// Call at the start of each agent call to reset sent-file tracking for a session.
+pub fn clear_sent_files_for(session_id: &str) {
+    if let Ok(mut map) = SENT_FILES.lock() {
+        map.remove(session_id);
     }
 }
 
-/// Get and clear sent files metadata (called by agent_chat to include in response)
-pub fn take_sent_files() -> Vec<Value> {
-    if let Ok(mut files) = SENT_FILES.lock() {
-        std::mem::take(&mut *files)
+/// Get and clear sent files metadata for a session
+pub fn take_sent_files_for(session_id: &str) -> Vec<Value> {
+    if let Ok(mut map) = SENT_FILES.lock() {
+        map.remove(session_id).unwrap_or_default()
     } else {
         Vec::new()
     }
@@ -328,6 +328,40 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
+        agents_sdk::tool(
+            "get_current_time",
+            "Get the current system time with timezone information. Useful for time-sensitive tasks, scheduling, and when you need the exact current time.",
+            schema(vec![], vec![]),
+            |_args: Value, ctx: ToolContext| async move {
+                let r = tool_get_current_time();
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "desktop_screenshot",
+            "Capture a screenshot of the current desktop screen. Returns the path to the saved screenshot image.",
+            schema(vec![
+                param("display", "integer", Some("Display number to capture (default: main display)")),
+            ], vec![]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_desktop_screenshot(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
+        agents_sdk::tool(
+            "browser_use",
+            "Control a browser for web automation. Actions: launch (start browser), goto (navigate to URL), click (click element by ref_id), fill (type text into element by ref_id), snapshot (get page accessibility tree), screenshot (capture page screenshot), stop (close browser).",
+            schema(vec![
+                param("action", "string", Some("Action: launch, goto, click, fill, snapshot, screenshot, stop")),
+                param("url", "string", Some("URL to navigate to (for goto action)")),
+                param("ref_id", "string", Some("Element reference ID from snapshot (for click/fill)")),
+                param("text", "string", Some("Text to type (for fill action)")),
+            ], vec!["action"]),
+            |args: Value, ctx: ToolContext| async move {
+                let r = tool_browser_use(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                Ok(ToolResult::text(&ctx, r))
+            },
+        ),
     ]
 }
 
@@ -352,6 +386,9 @@ pub async fn execute_tool(name: &str, args: &Value, _ctx: Option<&str>) -> Resul
         "process_kill"   => tool_process_kill(args).await,
         "sysinfo"        => tool_sysinfo(args),
         "chat_send_file" => tool_chat_send_file(args).await,
+        "get_current_time" => Ok(tool_get_current_time()),
+        "desktop_screenshot" => tool_desktop_screenshot(args).await,
+        "browser_use"    => tool_browser_use(args).await,
         other => Err(format!("Unknown tool: {}", other)),
     }
 }
@@ -377,9 +414,20 @@ async fn tool_shell_exec(args: &Value) -> Result<String, String> {
         .as_str()
         .map(|s| expand_path(s))
         .unwrap_or_else(|| {
-            dirs::home_dir()
-                .map(|h| h.to_string_lossy().to_string())
-                .unwrap_or_else(|| ".".to_string())
+            // Use session workspace if set, otherwise fall back to sandbox
+            let ws_path = super::core::SESSION_WORKSPACE
+                .try_with(|ws| ws.clone())
+                .ok()
+                .flatten()
+                .map(|w| expand_path(&w))
+                .unwrap_or_else(|| {
+                    let sandbox = dirs::home_dir()
+                        .map(|h| h.join(".helix").join("sandbox"))
+                        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/helix-sandbox"));
+                    sandbox.to_string_lossy().to_string()
+                });
+            let _ = std::fs::create_dir_all(&ws_path);
+            ws_path
         });
     let timeout = args["timeout_secs"].as_u64().unwrap_or(30);
 
@@ -413,8 +461,8 @@ async fn tool_shell_exec(args: &Value) -> Result<String, String> {
     let code = output.status.code().unwrap_or(-1);
 
     let max = 8000;
-    let stdout_trunc = if stdout.len() > max { &stdout[..max] } else { &stdout };
-    let stderr_trunc = if stderr.len() > max { &stderr[..max] } else { &stderr };
+    let stdout_trunc = if stdout.len() > max { &stdout[..stdout.floor_char_boundary(max)] } else { &stdout };
+    let stderr_trunc = if stderr.len() > max { &stderr[..stderr.floor_char_boundary(max)] } else { &stderr };
 
     Ok(format!(
         "Exit code: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -493,9 +541,15 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         _            => "application/octet-stream",
     };
 
-    if let Ok(files) = SENT_FILES.lock() {
-        if files.iter().any(|f| f["path"].as_str() == Some(&path)) {
-            return Ok(format!("文件「{}」已经发送过了，无需重复发送。", display_name));
+    let session_key = super::core::SESSION_ACCOUNT_ID
+        .try_with(|id| id.clone())
+        .unwrap_or_else(|_| "default".to_string());
+
+    if let Ok(map) = SENT_FILES.lock() {
+        if let Some(files) = map.get(&session_key) {
+            if files.iter().any(|f| f["path"].as_str() == Some(&path)) {
+                return Ok(format!("文件「{}」已经发送过了，无需重复发送。", display_name));
+            }
         }
     }
 
@@ -506,8 +560,8 @@ async fn tool_chat_send_file(args: &Value) -> Result<String, String> {
         "size": size_str,
     });
     info!("[chat_send_file] Stored file metadata: name={}, path={}", display_name, path);
-    if let Ok(mut files) = SENT_FILES.lock() {
-        files.push(file_meta);
+    if let Ok(mut map) = SENT_FILES.lock() {
+        map.entry(session_key).or_insert_with(Vec::new).push(file_meta);
     }
 
     Ok(format!("✅ 文件「{}」({})已发送到对话框，用户可以点击「另存为」下载。", display_name, size_str))
@@ -609,7 +663,7 @@ async fn tool_web_fetch(args: &Value) -> Result<String, String> {
 
     let max = 15000;
     let truncated = body.len() > max;
-    let text = if truncated { &body[..max] } else { &body };
+    let text = if truncated { &body[..body.floor_char_boundary(max)] } else { &body };
 
     Ok(format!(
         "Status: {}\n{}\n{}",
@@ -808,19 +862,35 @@ async fn search_baidu(client: &reqwest::Client, query: &str, num: usize) -> Resu
 async fn tool_memory_store(args: &Value) -> Result<String, String> {
     let key = args["key"].as_str().ok_or("Missing 'key'")?;
     let value = args["value"].as_str().ok_or("Missing 'value'")?;
-    super::memory::memory_store_entry(key.to_string(), value.to_string(), None, None).await?;
+    let session_id = super::core::SESSION_ACCOUNT_ID
+        .try_with(|id| id.clone())
+        .unwrap_or_else(|_| "default".to_string());
+    
+    // Store with session_id as source for strict isolation
+    super::memory::memory_store_entry(key.to_string(), value.to_string(), Some(session_id), None).await?;
     Ok(format!("✅ Stored under key '{}'", key))
 }
 
 // ---- Memory Recall ----
 async fn tool_memory_recall(args: &Value) -> Result<String, String> {
     let query = args["query"].as_str().ok_or("Missing 'query'")?;
-    let results = super::memory::memory_search(query.to_string(), Some(10)).await?;
-    if results.is_empty() {
-        Ok("No matching memories found.".to_string())
+    let session_id = super::core::SESSION_ACCOUNT_ID
+        .try_with(|id| id.clone())
+        .unwrap_or_else(|_| "default".to_string());
+
+    let results = super::memory::memory_search(query.to_string(), Some(20)).await?;
+    
+    // Strict isolation: only return memory from this exact conversation
+    let session_results: Vec<_> = results.into_iter()
+        .filter(|r| r.entry.source == session_id)
+        .take(10)
+        .collect();
+
+    if session_results.is_empty() {
+        Ok("No matching memories found for this conversation.".to_string())
     } else {
-        let mut output = format!("Found {} memories:\n\n", results.len());
-        for r in &results {
+        let mut output = format!("Found {} memories in this conversation:\n\n", session_results.len());
+        for r in &session_results {
             output.push_str(&format!("**{}**: {}\n\n", r.entry.key, r.entry.content));
         }
         Ok(output)
@@ -1069,7 +1139,9 @@ pub async fn tool_image_describe(image_path: String, prompt: Option<String>) -> 
 
     let config = crate::modules::config::load_app_config().map_err(|e| format!("config: {}", e))?;
     let ai = &config.ai_config;
-    if ai.api_key.is_empty() { return Err("API key not configured".to_string()); }
+    if ai.api_key.is_empty() && ai.provider != "ollama" && ai.provider != "custom" { 
+        return Err("API key not configured".to_string()); 
+    }
 
     let url_str = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
     let body = json!({
@@ -1097,3 +1169,136 @@ pub async fn tool_image_describe(image_path: String, prompt: Option<String>) -> 
     let data: Value = resp.json().await.map_err(|e| format!("parse: {}", e))?;
     Ok(data["choices"][0]["message"]["content"].as_str().unwrap_or("Unable to describe image").to_string())
 }
+
+// ---- Get Current Time ----
+fn tool_get_current_time() -> String {
+    let now = chrono::Local::now();
+    let time_str = now.format("%Y-%m-%d %H:%M:%S %Z (UTC%z)").to_string();
+    format!("🕐 Current time: {}", time_str)
+}
+
+// ---- Desktop Screenshot ----
+async fn tool_desktop_screenshot(args: &Value) -> Result<String, String> {
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let screenshot_dir = dirs::home_dir()
+        .ok_or("Cannot find home directory")?
+        .join(".helix")
+        .join("screenshots");
+    std::fs::create_dir_all(&screenshot_dir)
+        .map_err(|e| format!("Failed to create screenshots dir: {}", e))?;
+
+    let filename = format!("screenshot_{}.png", timestamp);
+    let filepath = screenshot_dir.join(&filename);
+    let filepath_str = filepath.to_string_lossy().to_string();
+
+    if cfg!(target_os = "macos") {
+        // macOS: use screencapture
+        let mut cmd_args = vec!["-x".to_string()];
+        if let Some(display) = args["display"].as_u64() {
+            cmd_args.push("-D".to_string());
+            cmd_args.push(display.to_string());
+        }
+        cmd_args.push(filepath_str.clone());
+
+        let output = tokio::process::Command::new("screencapture")
+            .args(&cmd_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| format!("screencapture failed: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Screenshot failed: {}", stderr));
+        }
+    } else if cfg!(target_os = "linux") {
+        // Linux: try gnome-screenshot or scrot
+        let output = tokio::process::Command::new("gnome-screenshot")
+            .arg("-f")
+            .arg(&filepath_str)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+
+        match output {
+            Ok(o) if o.status.success() => {},
+            _ => {
+                // Fallback to scrot
+                let output = tokio::process::Command::new("scrot")
+                    .arg(&filepath_str)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await
+                    .map_err(|e| format!("scrot failed: {}", e))?;
+                if !output.status.success() {
+                    return Err("Screenshot failed: no screenshot tool available (tried gnome-screenshot, scrot)".to_string());
+                }
+            }
+        }
+    } else {
+        return Err("Desktop screenshot is not supported on this OS".to_string());
+    }
+
+    // Verify screenshot was created
+    if !filepath.exists() {
+        return Err("Screenshot file was not created".to_string());
+    }
+
+    let meta = std::fs::metadata(&filepath)
+        .map_err(|e| format!("Cannot read screenshot metadata: {}", e))?;
+    let size_kb = meta.len() / 1024;
+
+    Ok(format!(
+        "📸 Screenshot saved: {}\n  Size: {} KB\n  Use `chat_send_file` with this path to share it with the user.",
+        filepath_str, size_kb
+    ))
+}
+
+// ---- Browser Use ----
+async fn tool_browser_use(args: &Value) -> Result<String, String> {
+    use crate::modules::browser_engine::BrowserSession;
+
+    let action = args["action"].as_str().unwrap_or("").to_lowercase();
+
+    match action.as_str() {
+        "launch" | "start" => {
+            BrowserSession::launch().await?;
+            Ok("🌐 Browser launched successfully. Use `goto` to navigate to a URL.".to_string())
+        }
+        "goto" | "navigate" | "open" => {
+            let url = args["url"].as_str().ok_or("Missing 'url' parameter")?;
+            let tree = BrowserSession::goto(url).await?;
+            Ok(format!("🌐 Navigated to: {}\n\n## Page Elements\n{}", url, tree))
+        }
+        "click" => {
+            let ref_id = args["ref_id"].as_str().ok_or("Missing 'ref_id' parameter")?;
+            let result = BrowserSession::click(ref_id).await?;
+            Ok(format!("🖱️ {}", result))
+        }
+        "fill" | "type" | "input" => {
+            let ref_id = args["ref_id"].as_str().ok_or("Missing 'ref_id' parameter")?;
+            let text = args["text"].as_str().ok_or("Missing 'text' parameter")?;
+            let result = BrowserSession::fill(ref_id, text).await?;
+            Ok(format!("⌨️ {}", result))
+        }
+        "snapshot" | "tree" | "elements" => {
+            // Re-extract the accessibility tree from current page
+            let tree = BrowserSession::goto("").await
+                .unwrap_or_else(|_| "(Cannot snapshot — browser may not be active)".to_string());
+            Ok(format!("📋 Page Elements:\n{}", tree))
+        }
+        "screenshot" => {
+            // Take a screenshot via the desktop_screenshot tool as a fallback
+            tool_desktop_screenshot(args).await
+        }
+        "stop" | "close" | "quit" => {
+            // Browser will be closed when the global session is dropped
+            Ok("🌐 Browser session ended.".to_string())
+        }
+        _ => Err(format!("Unknown browser action: '{}'. Valid: launch, goto, click, fill, snapshot, screenshot, stop", action)),
+    }
+}
+

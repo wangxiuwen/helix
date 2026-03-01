@@ -158,10 +158,11 @@ pub fn run() {
                 error!("Failed to initialize cron tables: {}", e);
             }
 
-            // Initialize skills tables
-            if let Err(e) = modules::skills::init_skills_tables() {
-                error!("Failed to initialize skills tables: {}", e);
-            }
+            // Start skills hot-reload watcher (scans ~/.helix/skills/ every 5s)
+            modules::skills::start_skills_watcher();
+
+            // Load user-defined environment variables from ~/.helix/envs.json
+            modules::environments::apply_envs_to_process();
 
             // Initialize hooks tables
             if let Err(e) = modules::hooks::init_hooks_tables() {
@@ -218,6 +219,9 @@ pub fn run() {
 
             // Start cron job scheduler
             modules::cron::start_cron_scheduler();
+
+            // Start heartbeat system (reads ~/.helix/HEARTBEAT.md periodically)
+            modules::cron::start_heartbeat();
 
             // Start embedded HTTP API server with Swagger UI
             modules::api_server::start_api_server(9520);
@@ -319,6 +323,7 @@ pub fn run() {
             modules::skills::skills_create,
             modules::skills::skills_uninstall,
             modules::skills::skills_install_git,
+            modules::skills::skills_hub_install,
             modules::skills::skills_open_dir,
             modules::skills::skills_get_dir,
             // Hooks commands
@@ -398,12 +403,31 @@ pub fn run() {
             // Subagents
             modules::subagents::spawn_subagent,
             modules::subagents::spawn_subagents_batch,
+            // Workspace
+            modules::workspace::workspace_list_files,
+            modules::workspace::workspace_read_file,
+            modules::workspace::workspace_write_file,
+            modules::workspace::workspace_delete_file,
+            modules::workspace::workspace_get_dir,
+            // Environments
+            modules::environments::envs_list,
+            modules::environments::envs_set,
+            modules::environments::envs_delete,
+            // MCP
+            modules::mcp::mcp_list,
+            modules::mcp::mcp_create,
+            modules::mcp::mcp_toggle,
+            modules::mcp::mcp_delete,
+            modules::mcp::mcp_update,
 
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match event {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    api.prevent_exit();
+                }
                 tauri::RunEvent::Exit => {
                     tracing::info!("Application exiting, cleaning up background tasks...");
                 }

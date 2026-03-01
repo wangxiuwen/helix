@@ -3,9 +3,10 @@ import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import CronJobs from './pages/CronJobs';
 import Skills from './pages/Skills';
+import MCP from './pages/MCP';
 import Logs from './pages/Logs';
-import Settings from './pages/Settings';
 import AIChat from './pages/AIChat';
+import Channels from './pages/Channels';
 import ThemeManager from './components/common/ThemeManager';
 import { useEffect } from 'react';
 import { useConfigStore } from './stores/useConfigStore';
@@ -29,12 +30,16 @@ const router = createBrowserRouter([
         element: <Skills />,
       },
       {
-        path: 'logs',
-        element: <Logs />,
+        path: 'mcp',
+        element: <MCP />,
       },
       {
-        path: 'settings',
-        element: <Settings />,
+        path: 'channels',
+        element: <Channels />,
+      },
+      {
+        path: 'logs',
+        element: <Logs />,
       },
     ],
   },

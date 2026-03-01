@@ -1,6 +1,7 @@
 export interface AppConfig {
     language: string;
     theme: string;
+    appAvatarUrl?: string;
     hidden_menu_items?: string[];
     ai_config?: {
         provider: string;

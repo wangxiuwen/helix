@@ -18,11 +18,17 @@ function Logs() {
     const bottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        invoke<LogEntry[]>('logs_get_all').then(setLogs).catch(console.error);
+        invoke('enable_debug_console').then(() => {
+            invoke<LogEntry[]>('get_debug_console_logs').then(setLogs).catch(console.error);
+        });
+
         const unlisten = listen<LogEntry>('log-event', (event) => {
             setLogs(prev => [...prev, event.payload]);
         });
-        return () => { unlisten.then(fn => fn()); };
+        return () => {
+            unlisten.then(fn => fn());
+            invoke('disable_debug_console').catch(console.error);
+        };
     }, []);
 
     useEffect(() => {
@@ -31,7 +37,7 @@ function Logs() {
 
     const handleClear = async () => {
         try {
-            await invoke('logs_clear');
+            await invoke('clear_debug_console_logs');
             setLogs([]);
         } catch (e) { console.error(e); }
     };
@@ -43,21 +49,19 @@ function Logs() {
     });
 
     const levelIcon = (level: string) => {
-        switch (level.toLowerCase()) {
-            case 'error': return <AlertTriangle size={12} className="text-red-400 shrink-0" />;
-            case 'warn': return <AlertTriangle size={12} className="text-yellow-400 shrink-0" />;
-            case 'debug': return <Bug size={12} className="text-gray-400 shrink-0" />;
-            default: return <Info size={12} className="text-[#07c160] shrink-0" />;
-        }
+        const lower = level.toLowerCase();
+        if (lower.includes('err')) return <AlertTriangle size={12} className="text-red-400 shrink-0" />;
+        if (lower.includes('warn')) return <AlertTriangle size={12} className="text-yellow-400 shrink-0" />;
+        if (lower.includes('debug')) return <Bug size={12} className="text-[#07c160] shrink-0" />; // User mentioned Debug showed up for Info, swapped colors to match standard console
+        return <Info size={12} className="text-blue-500 shrink-0" />;
     };
 
     const levelColor = (level: string) => {
-        switch (level.toLowerCase()) {
-            case 'error': return 'text-red-400';
-            case 'warn': return 'text-yellow-500';
-            case 'debug': return 'text-gray-400';
-            default: return 'text-[#07c160]';
-        }
+        const lower = level.toLowerCase();
+        if (lower.includes('err')) return 'text-red-400';
+        if (lower.includes('warn')) return 'text-yellow-500';
+        if (lower.includes('debug')) return 'text-[#07c160]';
+        return 'text-blue-500';
     };
 
     return (
@@ -120,7 +124,7 @@ function Logs() {
                                     <span className="text-[10px] text-gray-400 shrink-0 w-[52px]">
                                         {new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                                     </span>
-                                    <span className={`text-[10px] font-bold uppercase w-[36px] shrink-0 ${levelColor(log.level)}`}>{log.level.slice(0, 4)}</span>
+                                    <span className={`text-[10px] font-bold uppercase w-[40px] shrink-0 ${levelColor(log.level)}`}>{log.level.slice(0, 5)}</span>
                                     <span className="text-[10px] text-gray-400 shrink-0 max-w-[120px] truncate">{log.target}</span>
                                     <span className="text-[11px] text-gray-600 dark:text-gray-300 break-all">{log.message}</span>
                                 </div>

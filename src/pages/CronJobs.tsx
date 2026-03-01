@@ -13,7 +13,7 @@ interface CronTask {
     last_run: string | null;
     next_run: string | null;
     run_count: number;
-    notify_channel: 'feishu' | 'dingtalk' | null;
+    notify_channel: 'feishu' | 'dingtalk' | 'wecom' | null;
 }
 
 interface CronRun {
@@ -35,7 +35,7 @@ function CronJobs() {
     const [form, setForm] = useState({
         name: '', description: '', schedule: '', script: '',
         type: 'cron' as 'cron' | 'manual',
-        notifyChannel: null as 'feishu' | 'dingtalk' | null,
+        notifyChannel: null as 'feishu' | 'dingtalk' | 'wecom' | null,
     });
 
     const loadTasks = useCallback(async () => {
@@ -172,6 +172,15 @@ function CronJobs() {
                                 className="w-full px-3 py-2 text-sm bg-white dark:bg-[#2e2e2e] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400 font-mono" />
                             <textarea value={form.script} onChange={e => setForm({ ...form, script: e.target.value })} placeholder="执行脚本" rows={3}
                                 className="w-full px-3 py-2 text-sm bg-white dark:bg-[#2e2e2e] rounded-md border-0 outline-none resize-none text-gray-700 dark:text-gray-200 placeholder:text-gray-400 font-mono" />
+                            <div className="flex gap-2 mt-2">
+                                <select value={form.notifyChannel || ''} onChange={e => setForm({ ...form, notifyChannel: e.target.value ? e.target.value as any : null })}
+                                    className="w-full px-3 py-2 text-sm bg-white dark:bg-[#2e2e2e] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200">
+                                    <option value="">不发送通知</option>
+                                    <option value="feishu">飞书</option>
+                                    <option value="dingtalk">钉钉</option>
+                                    <option value="wecom">企业微信</option>
+                                </select>
+                            </div>
                             <div className="flex gap-2">
                                 <button onClick={handleAdd} disabled={!form.name} className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md disabled:opacity-50">创建</button>
                                 <button onClick={() => setShowAdd(false)} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md">取消</button>

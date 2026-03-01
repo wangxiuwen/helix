@@ -70,3 +70,6 @@ gtk = "0.18"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[patch.crates-io]
+agents-core = { path = "patches/agents-core" }

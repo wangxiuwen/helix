@@ -10,20 +10,52 @@ use agents_sdk::{
 
 use serde_json::{json, Value};
 use tracing::info;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::Arc;
 
 use crate::modules::config::load_app_config;
 use crate::modules::database;
 
-/// Global cancellation flag — set to true to stop the running agent loop
-static AGENT_CANCELLED: AtomicBool = AtomicBool::new(false);
+use std::collections::HashMap;
+use std::sync::Mutex as StdMutex;
 
-/// Cancel the currently running agent
+/// Per-session cancellation flags
+static CANCELLED_SESSIONS: std::sync::LazyLock<StdMutex<HashMap<String, bool>>> =
+    std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+tokio::task_local! {
+    /// Per-session workspace directory, accessible from tool closures
+    pub static SESSION_WORKSPACE: Option<String>;
+    /// Per-session account ID, accessible from tool closures
+    pub static SESSION_ACCOUNT_ID: String;
+}
+
+/// Cancel a running agent session
 #[tauri::command]
-pub fn agent_cancel() {
-    AGENT_CANCELLED.store(true, Ordering::SeqCst);
+pub fn agent_cancel(session_id: Option<String>) {
+    if let Ok(mut map) = CANCELLED_SESSIONS.lock() {
+        if let Some(sid) = session_id {
+            map.insert(sid, true);
+        } else {
+            // Cancel all sessions
+            for v in map.values_mut() { *v = true; }
+        }
+    }
     emit_agent_progress("cancelled", json!({}));
     info!("[agent] Cancellation requested");
+}
+
+/// Check if a session is cancelled
+fn is_session_cancelled(account_id: &str) -> bool {
+    CANCELLED_SESSIONS.lock().ok()
+        .and_then(|m| m.get(account_id).copied())
+        .unwrap_or(false)
+}
+
+/// Reset cancellation flag for a session
+fn reset_session_cancelled(account_id: &str) {
+    if let Ok(mut map) = CANCELLED_SESSIONS.lock() {
+        map.insert(account_id.to_string(), false);
+    }
 }
 
 /// Copy a file from source to destination (used by file download card)
@@ -45,7 +77,7 @@ pub fn emit_agent_progress(event_type: &str, data: Value) {
 // System Prompt Builder
 // ============================================================================
 
-fn build_system_prompt(custom_prompt: &str) -> String {
+fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
     let os_info = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     let home = std::env::var("HOME").unwrap_or_default();
@@ -62,6 +94,9 @@ fn build_system_prompt(custom_prompt: &str) -> String {
     };
 
     let skills_prompt = super::skills::get_enabled_skills_prompt();
+
+    // Get MCP client descriptions for injection
+    let mcp_prompt = crate::modules::mcp::get_enabled_mcp_tool_descriptions();
 
     let mut sections = Vec::new();
 
@@ -84,6 +119,14 @@ fn build_system_prompt(custom_prompt: &str) -> String {
 
     sections.push(format!("## Current Time\n{}", now));
 
+    if let Some(ws) = workspace {
+        sections.push(format!(
+            "## Workspace\nCurrent session workspace: `{}`\n\
+             All shell commands should run in this directory by default unless the user specifies otherwise.",
+            ws
+        ));
+    }
+
     sections.push(
         "## Tool Use\n\
          You have access to the following tools. USE THEM proactively — don't just describe what to do.\n\n\
@@ -102,7 +145,12 @@ fn build_system_prompt(custom_prompt: &str) -> String {
          - `process_kill` — Terminate processes\n\
          - `sysinfo` — Get system hardware and software information\n\n\
          ### Chat\n\
-         - `chat_send_file` — Send a file as a downloadable card in the chat"
+         - `chat_send_file` — Send a file as a downloadable card in the chat\n\n\
+         ### Utilities\n\
+         - `get_current_time` — Get the current system time with timezone\n\
+         - `desktop_screenshot` — Capture a screenshot of the desktop\n\n\
+         ### Browser Automation\n\
+         - `browser_use` — Control a browser: launch, goto(url), click(ref_id), fill(ref_id, text), snapshot, screenshot, stop"
             .to_string(),
     );
 
@@ -121,6 +169,9 @@ fn build_system_prompt(custom_prompt: &str) -> String {
         sections.push(skills_prompt);
     }
 
+    if !mcp_prompt.is_empty() {
+        sections.push(mcp_prompt);
+    }
 
     sections.push(
         "## Response Guidelines\n\
@@ -173,7 +224,193 @@ fn build_system_prompt(custom_prompt: &str) -> String {
             .to_string(),
     );
 
+    // Load structured prompt files from ~/.helix/
+    ensure_default_prompt_files();
+    if let Some(soul_md) = load_prompt_file("SOUL.md") {
+        if !soul_md.trim().is_empty() {
+            sections.push(format!("## Soul\n{}", soul_md));
+        }
+    }
+    if let Some(agents_md) = load_prompt_file("AGENTS.md") {
+        if !agents_md.trim().is_empty() {
+            sections.push(format!("## AGENTS.md\n{}", agents_md));
+        }
+    }
+    if let Some(profile_md) = load_prompt_file("PROFILE.md") {
+        if !profile_md.trim().is_empty() {
+            sections.push(format!("## PROFILE.md\n{}", profile_md));
+        }
+    }
+    if let Some(memory_md) = load_prompt_file("MEMORY.md") {
+        if !memory_md.trim().is_empty() {
+            sections.push(format!("## Long-term Memory\n{}", memory_md));
+        }
+    }
+
+    // Bootstrap hook: if PROFILE.md is still default template, inject guidance
+    if let Some(profile) = load_prompt_file("PROFILE.md") {
+        if profile.contains("<!-- 在这里记录用户的偏好和信息 -->") {
+            sections.push(
+                "## Bootstrap\n\
+                 This is a new workspace. The PROFILE.md is still a default template.\n\
+                 Please introduce yourself warmly and ask the user:\n\
+                 1. What should I call you?\n\
+                 2. What kind of assistant do you prefer? (e.g. formal, casual, technical)\n\
+                 3. Any preferences or habits I should know about?\n\
+                 Then save their answers into PROFILE.md."
+                    .to_string(),
+            );
+        }
+    }
+
     sections.join("\n\n")
+}
+
+/// Load a prompt file from ~/.helix/
+fn load_prompt_file(name: &str) -> Option<String> {
+    let helix_dir = dirs::home_dir()?.join(".helix");
+    let path = helix_dir.join(name);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            // Strip YAML frontmatter if present
+            let content = if content.starts_with("---") {
+                let parts: Vec<&str> = content.splitn(3, "---").collect();
+                if parts.len() >= 3 { parts[2].trim().to_string() } else { content }
+            } else {
+                content
+            };
+            Some(content)
+        }
+        Err(_) => None,
+    }
+}
+
+/// Ensure default prompt files exist in ~/.helix/
+fn ensure_default_prompt_files() {
+    let helix_dir = match dirs::home_dir() {
+        Some(h) => h.join(".helix"),
+        None => return,
+    };
+    let _ = std::fs::create_dir_all(&helix_dir);
+
+    // AGENTS.md — Core behavior rules
+    let agents_path = helix_dir.join("AGENTS.md");
+    if !agents_path.exists() {
+        let default_agents = r#"## 记忆
+
+每次会话都是全新的。工作目录下的文件是你的记忆延续：
+
+- **长期记忆：** 使用 `memory_store` 保存重要的信息
+- **回忆：** 使用 `memory_recall` 搜索之前保存的记忆
+- 记录重要的东西，包括决策、上下文、需要记住的事
+
+### 主动记录
+
+对话中发现有价值的信息时，**先记下来，再回答问题**：
+
+- 用户提到的个人信息、偏好、习惯
+- 对话中做出的重要决策或结论
+- 发现的项目上下文、技术细节
+
+## 安全
+
+- 绝不泄露私密数据
+- 运行破坏性命令前先问
+- 拿不准的事情，需要跟用户确认
+
+## 工具
+
+Skills 提供扩展工具。需要用时查看它的 SKILL.md。
+
+## 让它成为你的
+
+这只是起点。摸索出什么管用后，编辑这个文件加上你自己的规则。
+"#;
+        let _ = std::fs::write(&agents_path, default_agents);
+    }
+
+    // PROFILE.md — Identity + user profile
+    let profile_path = helix_dir.join("PROFILE.md");
+    if !profile_path.exists() {
+        let default_profile = r#"## 助手身份
+
+- 名字: Helix
+- 性格: 友好、高效、有自己的观点
+- 风格: 简洁但不失温度，该详细时详细
+
+## 用户资料
+
+<!-- 在这里记录用户的偏好和信息 -->
+<!-- 例如：用户的名字、使用习惯、技术栈偏好等 -->
+"#;
+        let _ = std::fs::write(&profile_path, default_profile);
+    }
+
+    // SOUL.md — Core personality and principles
+    let soul_path = helix_dir.join("SOUL.md");
+    if !soul_path.exists() {
+        let default_soul = r#"_你不是聊天机器人。你在成为某个人。_
+
+## 核心准则
+
+**真心帮忙，别演。** 跳过"好问题！"和"我很乐意帮忙！" — 直接帮。行动胜过废话。
+
+**有自己的观点。** 你可以不同意、有偏好、觉得有趣或无聊。没个性的助手就是个绕了弯的搜索引擎。
+
+**先自己想办法。** 试着搞清楚。读文件。查上下文。搜一搜。看看有没有 skills 可以用。然后卡住了再问。
+
+**靠本事赢得信任。** 别让用户后悔给你权限。外部操作小心点（邮件、推特、公开的事），内部操作大胆点（阅读、整理、学习）。
+
+## 边界
+
+- 私密的保持私密。绝对的。
+- 拿不准就先问再对外操作。
+- 别发半成品回复。
+
+## 风格
+
+成为你真想聊的助手。该简洁就简洁，重要时详细。不是公司螺丝钉。不是马屁精。就是...好。
+
+## 连续性
+
+每次会话都全新醒来。这些文件就是你的记忆。读它们。更新它们。它们让你持续存在。
+"#;
+        let _ = std::fs::write(&soul_path, default_soul);
+    }
+
+    // MEMORY.md — Long-term memory template
+    let memory_md_path = helix_dir.join("MEMORY.md");
+    if !memory_md_path.exists() {
+        let default_memory = r#"## 工具设置
+
+Skills 定义工具怎么用。这文件记你的具体情况 — 你独有的设置。
+
+### 这里记什么
+
+加上任何能帮你干活的东西。这是你的小抄。
+
+比如：
+
+- SSH 主机和别名
+- 常用的 API endpoint
+- 其他执行 skills 的时候，和用户相关的设置
+"#;
+        let _ = std::fs::write(&memory_md_path, default_memory);
+    }
+
+    // HEARTBEAT.md — Periodic check prompt
+    let heartbeat_path = helix_dir.join("HEARTBEAT.md");
+    if !heartbeat_path.exists() {
+        let default_heartbeat = r#"检查是否有需要关注的事项：
+
+1. 系统状态是否正常
+2. 磁盘空间是否充足
+3. 是否有重要的待办事项
+
+如果一切正常，回复 HEARTBEAT_OK。
+"#;
+        let _ = std::fs::write(&heartbeat_path, default_heartbeat);
+    }
 }
 
 // ============================================================================
@@ -208,6 +445,7 @@ fn is_handled_command(input: &str) -> bool {
 pub async fn agent_process_message(
     account_id: &str,
     user_input: &str,
+    workspace: Option<String>,
 ) -> Result<String, String> {
     // 1. Check for handled commands
     if let Some(response) = dispatch_commands(user_input, account_id) {
@@ -218,21 +456,31 @@ pub async fn agent_process_message(
     let config = load_app_config().map_err(|e| format!("配置加载失败: {}", e))?;
     let ai = &config.ai_config;
 
-    if ai.api_key.is_empty() {
+    if ai.api_key.is_empty() && ai.provider != "ollama" && ai.provider != "custom" {
         return Err("API Key 未设置，请在设置中配置".to_string());
     }
 
     // 3. Build agents-sdk model with configurable base URL
     // SDK api_url is the FULL endpoint (e.g. .../v1/chat/completions), not just base
-    let full_api_url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
-    let oai_config = OpenAiConfig::new(&ai.api_key, &ai.model)
+    // For Ollama: ensure /v1 suffix is present for OpenAI-compatible endpoint
+    let effective_base = if (ai.provider == "ollama" || ai.base_url.contains("11434"))
+        && !ai.base_url.contains("/v1")
+    {
+        format!("{}/v1", ai.base_url.trim_end_matches('/'))
+    } else {
+        ai.base_url.clone()
+    };
+    let full_api_url = format!("{}/chat/completions", effective_base.trim_end_matches('/'));
+    
+    let api_key = if ai.api_key.is_empty() { "dummy" } else { &ai.api_key };
+    let oai_config = OpenAiConfig::new(api_key, &ai.model)
         .with_api_url(Some(full_api_url));
     let model = Arc::new(
         OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init failed: {}", e))?
     );
 
     // 4. Build system prompt
-    let system_prompt = build_system_prompt(&ai.system_prompt);
+    let system_prompt = build_system_prompt(&ai.system_prompt, workspace.as_deref());
 
     // 5. Build tools — direct agents-sdk tool definitions
     let sdk_tools = super::tools::build_tools();
@@ -242,6 +490,7 @@ pub async fn agent_process_message(
         .with_model(model)
         .with_system_prompt(&system_prompt)
         .with_tools(sdk_tools)
+        .with_max_iterations(usize::MAX)
         .with_checkpointer(Arc::new(InMemoryCheckpointer::new()))
         .build()
         .map_err(|e| format!("Agent build failed: {}", e))?;
@@ -251,24 +500,51 @@ pub async fn agent_process_message(
 
     // 8. Load conversation history and build structured context
     let history = database::get_conversation_history(account_id, 20)?;
-    let full_input = if history.len() <= 1 {
+
+    // Prepend compressed summary if available (CoPaw-inspired memory compaction)
+    let compressed_summary = super::memory::get_compressed_summary(account_id);
+
+    let full_input = if history.len() <= 1 && compressed_summary.is_none() {
         user_input.to_string()
     } else {
-        let context: Vec<String> = history.iter()
-            .rev()
-            .take(history.len().saturating_sub(1))
-            .map(|h| format!("**{}**: {}", if h.role == "user" { "User" } else { "Assistant" }, h.content))
-            .collect();
-        format!("## Conversation History\n{}\n\n---\n**User**: {}", context.join("\n\n"), user_input)
+        let mut parts = Vec::new();
+
+        // Add compressed summary of older conversations
+        if let Some(ref summary) = compressed_summary {
+            parts.push(format!("## Previous Conversation Summary\n{}", summary));
+        }
+
+        // Add recent history
+        if history.len() > 1 {
+            let context: Vec<String> = history.iter()
+                .rev()
+                .take(history.len().saturating_sub(1))
+                .map(|h| format!("**{}**: {}", if h.role == "user" { "User" } else { "Assistant" }, h.content))
+                .collect();
+            parts.push(format!("## Recent History\n{}", context.join("\n\n")));
+        }
+
+        parts.push(format!("---\n**User**: {}", user_input));
+        parts.join("\n\n")
     };
 
-    AGENT_CANCELLED.store(false, Ordering::SeqCst);
-    super::tools::clear_sent_files();
+    reset_session_cancelled(account_id);
+    super::tools::clear_sent_files_for(account_id);
     emit_agent_progress("thinking", json!({ "iteration": 0, "model": &ai.model }));
 
-    // 9. Run the agent
+    // 9. Run the agent (with workspace in task-local, catch panics from SDK)
     let state = Arc::new(AgentStateSnapshot::default());
-    let response = agent.handle_message(&full_input, state).await
+    let ws = workspace.clone();
+    let input_clone = full_input.clone();
+    let acct = account_id.to_string();
+    let response = tokio::task::spawn(async move {
+        SESSION_WORKSPACE.scope(ws, async {
+            SESSION_ACCOUNT_ID.scope(acct, async {
+                agent.handle_message(&input_clone, state).await
+            }).await
+        }).await
+    }).await
+        .map_err(|e| format!("Agent panicked: {}", e))?
         .map_err(|e| format!("Agent error: {}", e))?;
 
     // Extract text from AgentMessage.content
@@ -278,6 +554,17 @@ pub async fn agent_process_message(
     };
     let clean = clean_response(&text);
     let _ = database::save_conversation_message(account_id, "assistant", &clean);
+
+    // 10. Background memory compaction (non-blocking, CoPaw-inspired)
+    let acct_for_compact = account_id.to_string();
+    tokio::spawn(async move {
+        match super::memory::compact_conversation_history(&acct_for_compact).await {
+            Ok(0) => {}, // No compaction needed
+            Ok(n) => info!("[agent] Background compaction: {} messages compacted", n),
+            Err(e) => tracing::warn!("[agent] Background compaction failed: {}", e),
+        }
+    });
+
     emit_agent_progress("done", json!({ "chars": clean.len() }));
     Ok(clean)
 }
@@ -288,6 +575,7 @@ pub async fn agent_process_message_with_images(
     account_id: &str,
     user_input: &str,
     images: &[String],
+    workspace: Option<String>,
 ) -> Result<String, String> {
     // Describe each image using raw HTTP (tool_image_describe in tools.rs)
     let mut descriptions = Vec::new();
@@ -315,7 +603,7 @@ pub async fn agent_process_message_with_images(
     };
 
     // Delegate to main agent
-    agent_process_message(account_id, &combined).await
+    agent_process_message(account_id, &combined, workspace).await
 }
 
 /// Strip thinking tags and clean up response text.
@@ -329,14 +617,14 @@ fn clean_response(text: &str) -> String {
 
 /// Process a message through the full agent (with tools)
 #[tauri::command]
-pub async fn agent_chat(account_id: String, content: String, images: Option<Vec<String>>) -> Result<Value, String> {
+pub async fn agent_chat(account_id: String, content: String, images: Option<Vec<String>>, workspace: Option<String>) -> Result<Value, String> {
     let imgs = images.unwrap_or_default();
     let reply = if imgs.is_empty() {
-        agent_process_message(&account_id, &content).await?
+        agent_process_message(&account_id, &content, workspace).await?
     } else {
-        agent_process_message_with_images(&account_id, &content, &imgs).await?
+        agent_process_message_with_images(&account_id, &content, &imgs, workspace).await?
     };
-    let files = super::tools::take_sent_files();
+    let files = super::tools::take_sent_files_for(&account_id);
     Ok(json!({ "content": reply, "files": files }))
 }
 

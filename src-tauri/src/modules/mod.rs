@@ -35,6 +35,9 @@ pub use app::scheduler;
 pub use app::cron;
 pub use app::update_checker;
 pub use app::cloudflared;
+pub use app::workspace;
+pub use app::environments;
+pub use app::mcp;
 
 // agent (core re-exported via agent/mod.rs `pub use core::*`)
 pub use agent::tools as agent_tools;
@@ -43,7 +46,7 @@ pub use agent::skills;
 pub use agent::hooks;
 pub use agent::commands;
 pub use agent::memory;
-#[allow(unused_imports)]
+
 pub use agent::sandbox;
 pub use agent::plugins;
 
@@ -71,5 +74,5 @@ pub use browser::engine as browser_engine;
 
 // Top-level re-exports from config
 pub use config::*;
-#[allow(unused_imports)]
+
 pub use logger::*;

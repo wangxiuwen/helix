@@ -4,19 +4,19 @@ import { executeTool, setSkillEnabled, addCustomSkill as addSkillToRegistry, rem
 import { invoke } from '@tauri-apps/api/core';
 
 function syncAIProviderToBackend(providers: AIProvider[]) {
+    // We now allow multiple providers, so syncing a global default is less strict.
+    // The actual active provider for a chat is synced right before sendMessage.
     if (typeof window === 'undefined') return;
     const active = providers.find(p => p.enabled);
     if (!active) return;
 
-    console.log('[syncAIProvider] Syncing provider to backend:', active.name, active.baseUrl);
+    console.log('[syncAIProvider] Syncing default provider to backend:', active.name, active.baseUrl);
     invoke('ai_set_config', {
         provider: active.type,
         baseUrl: active.baseUrl || '',
         apiKey: active.apiKey || '',
         model: active.defaultModel || active.models?.[0] || 'qwen-plus',
         autoReply: true,
-    }).then(() => {
-        console.log('[syncAIProvider] Success');
     }).catch(err => {
         console.error('[syncAIProvider] Failed:', err);
     });
@@ -66,8 +66,11 @@ export interface ChatSession {
     id: string;
     title: string;
     messages: ChatMessage[];
+    workspace?: string;  // working directory for this session
     model?: string;
     provider?: string;
+    agentAvatarUrl?: string; // Optional custom avatar for the agent in this session
+    pinned?: boolean; // Pinned to top
     createdAt: string;
     updatedAt: string;
 }
@@ -119,12 +122,13 @@ export interface CloudConfig {
     };
 }
 
-export interface NotificationChannel {
+export interface BotChannel {
     id: string;
     name: string;
-    type: 'feishu' | 'dingtalk';
-    webhookUrl: string;
+    type: 'feishu' | 'dingtalk' | 'wecom' | 'console' | 'discord' | 'qq' | 'imessage' | 'telegram' | 'custom';
     enabled: boolean;
+    botPrefix?: string;
+    config: Record<string, string>; // Store token/secret/webhookUrl etc.
 }
 
 export interface DevOpsConfig {
@@ -162,7 +166,7 @@ interface helixState {
     logs: LogEntry[];
     config: DevOpsConfig;
     cloudConfig: CloudConfig;
-    notificationChannels: NotificationChannel[];
+    botChannels: BotChannel[];
     skillStates: Record<string, boolean>;
     customSkills: CustomSkillDef[];
     agentSkills: AgentSkill[];
@@ -181,9 +185,11 @@ interface helixState {
     updateAIProvider: (id: string, updates: Partial<AIProvider>) => void;
 
     // Chat
-    createChatSession: (title?: string) => string;
+    createChatSession: (title?: string, workspace?: string) => string;
     deleteChatSession: (id: string) => void;
     setActiveChatId: (id: string | null) => void;
+    updateChatSession: (id: string, updates: Partial<ChatSession>) => void;
+    togglePinChatSession: (id: string) => void;
     sendMessage: (sessionId: string, content: string, images?: string[]) => Promise<void>;
     confirmToolExecution: (sessionId: string, messageId: string) => Promise<void>;
 
@@ -206,10 +212,10 @@ interface helixState {
     updateConfig: (config: Partial<DevOpsConfig>) => void;
     updateCloudConfig: (config: Partial<CloudConfig>) => void;
 
-    // Notification
-    addNotificationChannel: (channel: Omit<NotificationChannel, 'id'>) => void;
-    removeNotificationChannel: (id: string) => void;
-    updateNotificationChannel: (id: string, updates: Partial<NotificationChannel>) => void;
+    // Channels / Bots
+    addBotChannel: (channel: Omit<BotChannel, 'id'>) => void;
+    removeBotChannel: (id: string) => void;
+    updateBotChannel: (id: string, updates: Partial<BotChannel>) => void;
 
     // Skills
     toggleSkill: (skillId: string, enabled: boolean) => void;
@@ -245,7 +251,7 @@ export const useDevOpsStore = create<helixState>()(
                 aliyun: { accessKeyId: '', accessKeySecret: '', region: 'cn-beijing' },
                 k8s: { kubeconfigPath: '~/.kube/config', context: '', namespace: 'default' },
             },
-            notificationChannels: [],
+            botChannels: [],
             skillStates: {},
             customSkills: [],
             agentSkills: [],
@@ -303,7 +309,6 @@ export const useDevOpsStore = create<helixState>()(
                 set((s) => {
                     const newProviders = s.aiProviders.map((p) => {
                         if (p.id === id) return { ...p, ...updates };
-                        if (updates.enabled === true) return { ...p, enabled: false };
                         return p;
                     });
                     syncAIProviderToBackend(newProviders);
@@ -311,11 +316,12 @@ export const useDevOpsStore = create<helixState>()(
                 }),
 
             // ===== Chat with Function Calling =====
-            createChatSession: (title) => {
+            createChatSession: (title, workspace) => {
                 const id = generateId();
+                const autoWorkspace = workspace || `~/.helix/sandbox/${id}`;
                 const session: ChatSession = {
                     id, title: title || `新对话 ${new Date().toLocaleString()}`,
-                    messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+                    messages: [], workspace: autoWorkspace, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
                 };
                 set((s) => ({ chatSessions: [session, ...s.chatSessions], activeChatId: id }));
                 return id;
@@ -326,49 +332,68 @@ export const useDevOpsStore = create<helixState>()(
                     activeChatId: s.activeChatId === id ? null : s.activeChatId,
                 })),
             setActiveChatId: (id) => set({ activeChatId: id }),
+            updateChatSession: (id, updates) =>
+                set((s) => ({
+                    chatSessions: s.chatSessions.map((cs) => (cs.id === id ? { ...cs, ...updates } : cs)),
+                })),
+            togglePinChatSession: (id) =>
+                set((s) => ({
+                    chatSessions: s.chatSessions.map(cs => cs.id === id ? { ...cs, pinned: !cs.pinned } : cs)
+                })),
 
             sendMessage: async (sessionId, content, images) => {
                 const state = get();
                 const session = state.chatSessions.find((s) => s.id === sessionId);
                 if (!session) return;
 
+                const newUserMsgId = generateId();
                 // Add user message
                 set((s) => ({
                     chatSessions: s.chatSessions.map((cs) =>
                         cs.id === sessionId ? {
                             ...cs,
-                            messages: [...cs.messages, { id: generateId(), role: 'user' as const, content, images, timestamp: new Date().toISOString() }],
+                            messages: [...cs.messages, { id: newUserMsgId, role: 'user' as const, content, images, timestamp: new Date().toISOString() }],
                             updatedAt: new Date().toISOString(),
                         } : cs
                     ),
-                    loading: { ...s.loading, chat: true },
+                    loading: { ...s.loading, [`chat-${sessionId}`]: true },
                 }));
 
                 try {
                     const { invoke } = await import('@tauri-apps/api/core');
                     const accountId = `chat:${sessionId}`;
 
-                    // Ensure backend config is up-to-date with current provider/model
-                    const active = get().aiProviders.find(p => p.enabled);
-                    const currentModel = active?.defaultModel || active?.models?.[0] || '';
-                    if (active) {
+                    // Ensure backend config is up-to-date with session's provider/model
+                    const activeP = session.provider
+                        ? get().aiProviders.find(p => p.id === session.provider)
+                        : get().aiProviders.find(p => p.enabled);
+                    const currentModel = session.model || activeP?.defaultModel || activeP?.models?.[0] || '';
+                    if (activeP) {
                         await invoke('ai_set_config', {
-                            provider: active.type,
-                            baseUrl: active.baseUrl || '',
-                            apiKey: active.apiKey || '',
+                            provider: activeP.type,
+                            baseUrl: activeP.baseUrl || '',
+                            apiKey: activeP.apiKey || '',
                             model: currentModel,
                         });
                     }
 
                     // If model changed since last message in this session, clear backend history
-                    const sess = get().chatSessions.find(cs => cs.id === sessionId);
-                    if (sess && sess.model && sess.model !== currentModel) {
-                        await invoke('agent_clear_history', { accountId }).catch(() => { });
+                    if (session.messages.length > 0) {
+                        const lastMsg = session.messages[session.messages.length - 1];
+                        if (lastMsg.model && lastMsg.model !== currentModel) {
+                            await invoke('agent_clear_history', { accountId }).catch(() => { });
+                        }
                     }
-                    // Track current model on session
+
+                    // Track current model on user message
                     set((s) => ({
                         chatSessions: s.chatSessions.map((cs) =>
-                            cs.id === sessionId ? { ...cs, model: currentModel } : cs
+                            cs.id === sessionId ? {
+                                ...cs,
+                                provider: activeP?.id,
+                                model: currentModel,
+                                messages: cs.messages.map(m => m.id === newUserMsgId ? { ...m, model: currentModel } : m)
+                            } : cs
                         ),
                     }));
 
@@ -376,6 +401,7 @@ export const useDevOpsStore = create<helixState>()(
                         accountId,
                         content,
                         images: images || [],
+                        workspace: session?.workspace || null,
                     });
 
                     const assistantMsg: ChatMessage = {
@@ -404,7 +430,7 @@ export const useDevOpsStore = create<helixState>()(
                         ),
                     }));
                 } finally {
-                    set((s) => ({ loading: { ...s.loading, chat: false } }));
+                    set((s) => ({ loading: { ...s.loading, [`chat-${sessionId}`]: false } }));
                 }
             },
 
@@ -468,14 +494,14 @@ export const useDevOpsStore = create<helixState>()(
                     },
                 })),
 
-            // ===== Notifications =====
-            addNotificationChannel: (channel) =>
-                set((s) => ({ notificationChannels: [...s.notificationChannels, { ...channel, id: generateId() }] })),
-            removeNotificationChannel: (id) =>
-                set((s) => ({ notificationChannels: s.notificationChannels.filter((c) => c.id !== id) })),
-            updateNotificationChannel: (id, updates) =>
+            // ===== Channels / Bots =====
+            addBotChannel: (channel) =>
+                set((s) => ({ botChannels: [...s.botChannels, { ...channel, id: generateId() }] })),
+            removeBotChannel: (id) =>
+                set((s) => ({ botChannels: s.botChannels.filter((c) => c.id !== id) })),
+            updateBotChannel: (id, updates) =>
                 set((s) => ({
-                    notificationChannels: s.notificationChannels.map((c) => (c.id === id ? { ...c, ...updates } : c)),
+                    botChannels: s.botChannels.map((c) => (c.id === id ? { ...c, ...updates } : c)),
                 })),
 
             // ===== Skills =====
@@ -566,7 +592,7 @@ export const useDevOpsStore = create<helixState>()(
                 alerts: state.alerts,
                 config: state.config,
                 cloudConfig: state.cloudConfig,
-                notificationChannels: state.notificationChannels,
+                botChannels: state.botChannels,
                 skillStates: state.skillStates,
                 customSkills: state.customSkills,
             }),

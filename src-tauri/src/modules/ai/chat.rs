@@ -305,18 +305,15 @@ pub async fn ai_list_models(base_url: String, api_key: String) -> Result<Value, 
 
     let mut models: Vec<String> = Vec::new();
 
-    // Try OpenAI-compatible /models endpoint
-    if let Ok(resp) = client.get(&url).headers(headers).send().await {
-        if resp.status().is_success() {
-            if let Ok(data) = resp.json::<Value>().await {
-                if let Some(arr) = data.get("data").and_then(|d| d.as_array()) {
-                    for item in arr {
-                        if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
-                            models.push(id.to_string());
-                        }
-                    }
-                }
-                if models.is_empty() {
+    // For Ollama: try /api/tags first (native endpoint, always works)
+    let is_ollama = effective_url.contains("11434") || effective_url.contains("ollama");
+    if is_ollama {
+        let ollama_base = effective_url.trim_end_matches('/').trim_end_matches("/v1");
+        let ollama_url = format!("{}/api/tags", ollama_base);
+        info!("Trying Ollama /api/tags: {}", ollama_url);
+        if let Ok(resp) = client.get(&ollama_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(data) = resp.json::<Value>().await {
                     if let Some(arr) = data.get("models").and_then(|d| d.as_array()) {
                         for item in arr {
                             if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
@@ -329,16 +326,24 @@ pub async fn ai_list_models(base_url: String, api_key: String) -> Result<Value, 
         }
     }
 
-    // Fallback: Ollama /api/tags
-    if models.is_empty() && (base_url.contains("localhost") || base_url.contains("127.0.0.1")) {
-        let ollama_url = format!("{}/api/tags", base_url.trim_end_matches('/').trim_end_matches("/v1"));
-        if let Ok(resp) = client.get(&ollama_url).send().await {
+    // Try OpenAI-compatible /models endpoint
+    if models.is_empty() {
+        if let Ok(resp) = client.get(&url).headers(headers).send().await {
             if resp.status().is_success() {
                 if let Ok(data) = resp.json::<Value>().await {
-                    if let Some(arr) = data.get("models").and_then(|d| d.as_array()) {
+                    if let Some(arr) = data.get("data").and_then(|d| d.as_array()) {
                         for item in arr {
-                            if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
-                                models.push(name.to_string());
+                            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                                models.push(id.to_string());
+                            }
+                        }
+                    }
+                    if models.is_empty() {
+                        if let Some(arr) = data.get("models").and_then(|d| d.as_array()) {
+                            for item in arr {
+                                if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                                    models.push(name.to_string());
+                                }
                             }
                         }
                     }

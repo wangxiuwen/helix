@@ -57,9 +57,83 @@
         "no_provider": "Please enable an AI provider in Settings first",
         "start": "Start chatting",
         "input_placeholder": "Type a message...",
-        "empty_hint": "Send a message to start the conversation"
+        "empty_hint": "Send a message to start the conversation",
+        "search": "Search",
+        "confirm": "Confirm",
+        "cancel": "Cancel",
+        "stop": "Stop",
+        "send": "Send",
+        "thinking": "🤔 Thinking... (Model: {{model}})",
+        "tool_calling": "🔧 Calling tool: {{name}}",
+        "tool_done": "✅ {{name}} done ({{chars}} chars)",
+        "new_chat": "New Chat",
+        "download": "⬇ Download",
+        "save_as": "⬇ Save As",
+        "emoji": "Emoji",
+        "upload_image": "Upload Image",
+        "no_provider_selected": "No Provider",
+        "no_providers": "No providers available",
+        "select_model": "Select Model",
+        "fetching_models": "Fetching models...",
+        "no_models": "No models available"
     },
     "settings": {
+        "title": "Settings",
+        "groups": {
+            "general": "General",
+            "agent": "Agent",
+            "other": "Other"
+        },
+        "menu": {
+            "appearance": "Appearance",
+            "ai_providers": "AI Providers",
+            "workspace": "Workspace",
+            "mcp": "MCP",
+            "environments": "Environments",
+            "about": "About"
+        },
+        "appearance": {
+            "title": "Appearance Settings",
+            "theme": "Theme",
+            "theme_desc": "Toggle light/dark mode"
+        },
+        "ai": {
+            "title": "AI Providers",
+            "add": "Add Provider",
+            "cancel": "Cancel",
+            "confirm_add": "Add",
+            "custom": "Custom Provider",
+            "name": "Name",
+            "type": "Type",
+            "default_model": "Default Model",
+            "models": "Supported Models",
+            "models_placeholder": "Comma separated, e.g., gpt-4,gpt-3.5",
+            "built_in": "Built-in",
+            "active": "Active",
+            "inactive": "Inactive"
+        },
+        "workspace": {
+            "title": "Workspace Limits",
+            "desc": "Set local directories Helix can access. For security, it is recommended to authorize only specific project folders."
+        },
+        "mcp": {
+            "title": "MCP Servers",
+            "desc": "Model Context Protocol allows AI models to safely access local tools and data sources."
+        },
+        "environments": {
+            "title": "Environments",
+            "add": "Add",
+            "cancel": "Cancel",
+            "save": "Save",
+            "secret_label": "Secret (Masked in UI)",
+            "empty": "No environment variables"
+        },
+        "about": {
+            "title": "About",
+            "desc": "AI driven agent platform",
+            "version": "Version",
+            "stack": "Tech Stack"
+        },
         "general": {
             "language": "Language"
         }
@@ -99,7 +173,58 @@
         "placeholder_max_ips": "0 means unlimited",
         "placeholder_username": "Enter username",
         "hint_curfew": "Limit token usage hours",
-        "hint_custom_expires": "Custom expiration time",
         "hint_max_ips": "Limit number of IPs using this token"
+    },
+    "skills": {
+        "title": "Skills",
+        "subtitle": "Manage Agent skills and capability extensions",
+        "skills_count": "skills",
+        "enabled_count": "enabled",
+        "open_dir": "Open Folder",
+        "import_skill": "Import Skill",
+        "create_skill": "Create Skill",
+        "local_skills": "Local Skills",
+        "hub_skills": "Skills Hub",
+        "search_placeholder": "Search skills...",
+        "no_match": "No matching skills",
+        "no_skills": "No skills yet",
+        "empty_hint": "Click \"Create Skill\" or \"Import Skill\" to start",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "no_desc": "No description",
+        "uninstall": "Uninstall",
+        "search": "Search...",
+        "install": "Install Skill",
+        "view_source": "View Source",
+        "select_hint1": "Select a skill from the left to view details",
+        "select_hint2": "Or import a custom skill from URL",
+        "import_from_url": "Import from URL",
+        "desc": "Description",
+        "tags": "Tags",
+        "homepage": "Homepage",
+        "path": "Path",
+        "content": "Content",
+        "copy": "Copy",
+        "preview": "Preview",
+        "import_title": "Import Skill",
+        "supported_urls": "Supported URL sources:",
+        "url_examples": "URL Examples:",
+        "import_placeholder": "Enter skill path or repository URL",
+        "importing": "Importing...",
+        "create_title": "Create Skill",
+        "create_hint": "Create template in",
+        "create_hint2": "",
+        "create_placeholder": "Skill name (e.g. my-skill)",
+        "cancel": "Cancel",
+        "create_btn": "Create",
+        "confirm_uninstall": "Are you sure you want to uninstall \"{{name}}\"?",
+        "uninstalled_toast": "Skill \"{{name}}\" uninstalled",
+        "created_toast": "Skill \"{{name}}\" created",
+        "install_success_toast": "Skill \"{{name}}\" installed successfully",
+        "install_failed": "Installation failed",
+        "copied_toast": "Copied to clipboard",
+        "enabled_toast": "{{icon}} {{name}} enabled",
+        "disabled_toast": "{{icon}} {{name}} disabled",
+        "hub_source_helix": "Helix Official"
     }
 }
