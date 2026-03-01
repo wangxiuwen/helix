@@ -24,6 +24,7 @@ import {
     X,
 } from 'lucide-react';
 import { useDevOpsStore, AIProvider } from '../stores/useDevOpsStore';
+import { useConfigStore } from '../stores/useConfigStore';
 import { AvatarPicker } from '../components/common/AvatarPicker';
 import { invoke } from '@tauri-apps/api/core';
 import i18n from '../i18n';
@@ -79,6 +80,7 @@ if (!window.__helix_listeners_registered) {
 
 function AIChat() {
     const { t } = useTranslation();
+    const { config } = useConfigStore();
     const {
         chatSessions,
         activeChatId,
@@ -439,7 +441,9 @@ function AIChat() {
                                         title={msg.role !== 'user' ? t('chat.change_avatar', '更换助手头像') : undefined}
                                     >
                                         {msg.role === 'user'
-                                            ? <User size={15} className="text-gray-700" />
+                                            ? config?.appAvatarUrl
+                                                ? <img src={config.appAvatarUrl} alt="User" className="w-full h-full object-cover" />
+                                                : <User size={15} className="text-gray-700" />
                                             : activeSession.agentAvatarUrl
                                                 ? <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
                                                 : <Bot size={15} className="text-white" />
