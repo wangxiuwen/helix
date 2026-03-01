@@ -12,12 +12,9 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let texts = modules::i18n::get_tray_texts(&config.language);
     
     // 2. Load icon
-    let icon_bytes = include_bytes!("../../../icons/tray-icon.png");
-    let img = image::load_from_memory(icon_bytes)
-        .map_err(|e| tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
-        .to_rgba8();
-    let (width, height) = img.dimensions();
-    let icon = Image::new_owned(img.into_raw(), width, height);
+    let icon = app.default_window_icon().cloned().ok_or_else(|| {
+        tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "No default window icon found"))
+    })?;
 
     // 3. Define menu items
     let show_i = MenuItem::with_id(app, "show", &texts.show_window, true, None::<&str>)?;
@@ -37,6 +34,7 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .icon(icon)
+        .icon_as_template(true)
         .on_menu_event(move |app, event| {
             match event.id().as_ref() {
                 "show" => {

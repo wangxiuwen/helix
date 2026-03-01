@@ -57,6 +57,7 @@
         "https://devhelix.example.com/updates/{{target}}/{{arch}}/{{current_version}}"
       ],
       "pubkey": ""
-    }
+    },
+    "tray-icon": null
   }
 }

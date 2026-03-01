@@ -12,6 +12,7 @@ import {
     FolderOpen,
     ImagePlus,
     Plus,
+    Pin,
     RefreshCw,
     Search,
     Smile,
@@ -23,6 +24,7 @@ import {
     X,
 } from 'lucide-react';
 import { useDevOpsStore, AIProvider } from '../stores/useDevOpsStore';
+import { AvatarPicker } from '../components/common/AvatarPicker';
 import { invoke } from '@tauri-apps/api/core';
 import i18n from '../i18n';
 
@@ -85,6 +87,8 @@ function AIChat() {
         setActiveChatId,
         sendMessage,
         confirmToolExecution,
+        updateChatSession,
+        togglePinChatSession,
         aiProviders,
     } = useDevOpsStore();
 
@@ -122,6 +126,9 @@ function AIChat() {
 
     // Agent progress — sync from window-level buffer
     const [agentStatus, setAgentStatus] = useState<string[]>(() => [...window.__helix_agent_status]);
+
+    // Avatar Picker State
+    const [showAvatarPicker, setShowAvatarPicker] = useState(false);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -230,9 +237,13 @@ function AIChat() {
         e.target.value = '';
     };
 
-    const filteredSessions = chatSessions.filter((s) =>
-        !searchQuery || s.title.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filteredSessions = chatSessions
+        .filter((s) => !searchQuery || s.title.toLowerCase().includes(searchQuery.toLowerCase()))
+        .sort((a, b) => {
+            if (a.pinned && !b.pinned) return -1;
+            if (!a.pinned && b.pinned) return 1;
+            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        });
 
     const getLastMessage = (session: typeof chatSessions[0]) => {
         const last = session.messages[session.messages.length - 1];
@@ -294,8 +305,17 @@ function AIChat() {
                                     }`}
                                 onClick={() => setActiveChatId(session.id)}
                             >
-                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mr-3">
-                                    <Bot size={17} className="text-white" />
+                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#07c160] to-[#05a050] flex items-center justify-center shrink-0 mr-3 overflow-hidden relative">
+                                    {session.agentAvatarUrl ? (
+                                        <img src={session.agentAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                                    ) : (
+                                        <Bot size={17} className="text-white" />
+                                    )}
+                                    {session.pinned && (
+                                        <div className="absolute top-0 right-0 w-3 h-3 bg-white dark:bg-[#252525] rounded-full flex items-center justify-center">
+                                            <Pin size={8} className="text-[#07c160] rotate-45" fill="currentColor" />
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="flex-1 min-w-0">
                                     <div className="flex items-center justify-between">
@@ -309,12 +329,27 @@ function AIChat() {
                                                 : (getLastMessage(session) || <span className="italic opacity-50">{t('chat.new_chat', '新对话')}</span>)
                                             }
                                         </p>
-                                        <button
-                                            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-red-400 transition-all shrink-0 ml-1"
-                                            onClick={(e) => { e.stopPropagation(); deleteChatSession(session.id); }}
-                                        >
-                                            <Trash2 size={11} className="text-gray-400" />
-                                        </button>
+                                        <div className="flex items-center gap-1 shrink-0 ml-1">
+                                            <button
+                                                className={`p-0.5 rounded transition-all shrink-0 ${session.pinned ? 'text-[#07c160] opacity-100' : 'text-gray-400 opacity-0 group-hover:opacity-100'}`}
+                                                onClick={(e) => { e.stopPropagation(); togglePinChatSession(session.id); }}
+                                                title={session.pinned ? t('chat.unpin', '取消置顶') : t('chat.pin', '置顶')}
+                                            >
+                                                <Pin size={11} className={session.pinned ? "rotate-45" : ""} fill={session.pinned ? "currentColor" : "none"} />
+                                            </button>
+                                            <button
+                                                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-red-400 transition-all shrink-0"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (window.confirm(t('chat.confirm_delete', '确定要删除此对话吗？'))) {
+                                                        deleteChatSession(session.id);
+                                                    }
+                                                }}
+                                                title={t('chat.delete_session', '删除对话')}
+                                            >
+                                                <Trash2 size={11} className="text-gray-400" />
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -381,13 +416,22 @@ function AIChat() {
                             )}
                             {activeSession.messages.map((msg) => (
                                 <div key={msg.id} className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                                    <div className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center mt-0.5 ${msg.role === 'user'
-                                        ? 'bg-[#95ec69] dark:bg-[#3eb575]'
-                                        : 'bg-gradient-to-br from-[#07c160] to-[#05a050]'
-                                        }`}>
+                                    <div
+                                        className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center mt-0.5 overflow-hidden ${msg.role === 'user'
+                                            ? 'bg-[#95ec69] dark:bg-[#3eb575]'
+                                            : 'bg-gradient-to-br from-[#07c160] to-[#05a050] cursor-pointer hover:shadow-md transition-shadow'
+                                            }`}
+                                        onClick={() => {
+                                            if (msg.role !== 'user') setShowAvatarPicker(true);
+                                        }}
+                                        title={msg.role !== 'user' ? t('chat.change_avatar', '更换助手头像') : undefined}
+                                    >
                                         {msg.role === 'user'
                                             ? <User size={15} className="text-gray-700" />
-                                            : <Bot size={15} className="text-white" />}
+                                            : activeSession.agentAvatarUrl
+                                                ? <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-full h-full object-cover" />
+                                                : <Bot size={15} className="text-white" />
+                                        }
                                     </div>
                                     <div className="max-w-[65%]">
                                         <div className={`rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed ${msg.role === 'user'
@@ -689,6 +733,18 @@ function AIChat() {
                     </>
                 )}
             </div>
+            {/* Custom Avatar Picker */}
+            <AvatarPicker
+                isOpen={showAvatarPicker}
+                onClose={() => setShowAvatarPicker(false)}
+                currentAvatarUrl={activeSession?.agentAvatarUrl}
+                title={t('chat.change_avatar', '更换助手头像')}
+                onSelect={(url: string) => {
+                    if (activeChatId) {
+                        updateChatSession(activeChatId, { agentAvatarUrl: url });
+                    }
+                }}
+            />
         </>
     );
 }

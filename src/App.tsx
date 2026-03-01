@@ -6,6 +6,7 @@ import Skills from './pages/Skills';
 import MCP from './pages/MCP';
 import Logs from './pages/Logs';
 import AIChat from './pages/AIChat';
+import Channels from './pages/Channels';
 import ThemeManager from './components/common/ThemeManager';
 import { useEffect } from 'react';
 import { useConfigStore } from './stores/useConfigStore';
@@ -31,6 +32,10 @@ const router = createBrowserRouter([
       {
         path: 'mcp',
         element: <MCP />,
+      },
+      {
+        path: 'channels',
+        element: <Channels />,
       },
       {
         path: 'logs',

@@ -283,7 +283,7 @@ const notificationSkill: OpsSkill = {
     enabled: true,
     version: '1.0.0',
     author: 'helix',
-    configRequired: ['notificationChannels'],
+    configRequired: ['botChannels'],
     tools: [
         {
             name: 'send_notification',
@@ -293,13 +293,13 @@ const notificationSkill: OpsSkill = {
                 message: { type: 'string', description: '通知内容', required: true },
             },
             execute: async (params: Record<string, any>) => {
-                const { notificationChannels } = useDevOpsStore.getState();
-                const channel = notificationChannels?.find(
+                const { botChannels } = useDevOpsStore.getState();
+                const channel = botChannels?.find(
                     (c: any) => c.type === params.channel && c.enabled
                 );
-                if (!channel) return `未配置或未启用 ${params.channel === 'feishu' ? '飞书' : params.channel === 'dingtalk' ? '钉钉' : '企业微信'} 通知渠道`;
+                if (!channel || !channel.config?.webhookUrl) return `未配置或未启用 ${params.channel === 'feishu' ? '飞书' : params.channel === 'dingtalk' ? '钉钉' : '企业微信'} 通知渠道 Webhook`;
 
-                const res = await fetch(channel.webhookUrl, {
+                const res = await fetch(channel.config.webhookUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(

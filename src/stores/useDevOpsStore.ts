@@ -4,19 +4,19 @@ import { executeTool, setSkillEnabled, addCustomSkill as addSkillToRegistry, rem
 import { invoke } from '@tauri-apps/api/core';
 
 function syncAIProviderToBackend(providers: AIProvider[]) {
+    // We now allow multiple providers, so syncing a global default is less strict.
+    // The actual active provider for a chat is synced right before sendMessage.
     if (typeof window === 'undefined') return;
     const active = providers.find(p => p.enabled);
     if (!active) return;
 
-    console.log('[syncAIProvider] Syncing provider to backend:', active.name, active.baseUrl);
+    console.log('[syncAIProvider] Syncing default provider to backend:', active.name, active.baseUrl);
     invoke('ai_set_config', {
         provider: active.type,
         baseUrl: active.baseUrl || '',
         apiKey: active.apiKey || '',
         model: active.defaultModel || active.models?.[0] || 'qwen-plus',
         autoReply: true,
-    }).then(() => {
-        console.log('[syncAIProvider] Success');
     }).catch(err => {
         console.error('[syncAIProvider] Failed:', err);
     });
@@ -69,6 +69,8 @@ export interface ChatSession {
     workspace?: string;  // working directory for this session
     model?: string;
     provider?: string;
+    agentAvatarUrl?: string; // Optional custom avatar for the agent in this session
+    pinned?: boolean; // Pinned to top
     createdAt: string;
     updatedAt: string;
 }
@@ -120,12 +122,13 @@ export interface CloudConfig {
     };
 }
 
-export interface NotificationChannel {
+export interface BotChannel {
     id: string;
     name: string;
-    type: 'feishu' | 'dingtalk' | 'wecom';
-    webhookUrl: string;
+    type: 'feishu' | 'dingtalk' | 'wecom' | 'console' | 'discord' | 'qq' | 'imessage' | 'telegram' | 'custom';
     enabled: boolean;
+    botPrefix?: string;
+    config: Record<string, string>; // Store token/secret/webhookUrl etc.
 }
 
 export interface DevOpsConfig {
@@ -163,7 +166,7 @@ interface helixState {
     logs: LogEntry[];
     config: DevOpsConfig;
     cloudConfig: CloudConfig;
-    notificationChannels: NotificationChannel[];
+    botChannels: BotChannel[];
     skillStates: Record<string, boolean>;
     customSkills: CustomSkillDef[];
     agentSkills: AgentSkill[];
@@ -186,6 +189,7 @@ interface helixState {
     deleteChatSession: (id: string) => void;
     setActiveChatId: (id: string | null) => void;
     updateChatSession: (id: string, updates: Partial<ChatSession>) => void;
+    togglePinChatSession: (id: string) => void;
     sendMessage: (sessionId: string, content: string, images?: string[]) => Promise<void>;
     confirmToolExecution: (sessionId: string, messageId: string) => Promise<void>;
 
@@ -208,10 +212,10 @@ interface helixState {
     updateConfig: (config: Partial<DevOpsConfig>) => void;
     updateCloudConfig: (config: Partial<CloudConfig>) => void;
 
-    // Notification
-    addNotificationChannel: (channel: Omit<NotificationChannel, 'id'>) => void;
-    removeNotificationChannel: (id: string) => void;
-    updateNotificationChannel: (id: string, updates: Partial<NotificationChannel>) => void;
+    // Channels / Bots
+    addBotChannel: (channel: Omit<BotChannel, 'id'>) => void;
+    removeBotChannel: (id: string) => void;
+    updateBotChannel: (id: string, updates: Partial<BotChannel>) => void;
 
     // Skills
     toggleSkill: (skillId: string, enabled: boolean) => void;
@@ -246,7 +250,7 @@ export const useDevOpsStore = create<helixState>()(
                 aliyun: { accessKeyId: '', accessKeySecret: '', region: 'cn-beijing' },
                 k8s: { kubeconfigPath: '~/.kube/config', context: '', namespace: 'default' },
             },
-            notificationChannels: [],
+            botChannels: [],
             skillStates: {},
             customSkills: [],
             agentSkills: [],
@@ -304,7 +308,6 @@ export const useDevOpsStore = create<helixState>()(
                 set((s) => {
                     const newProviders = s.aiProviders.map((p) => {
                         if (p.id === id) return { ...p, ...updates };
-                        if (updates.enabled === true) return { ...p, enabled: false };
                         return p;
                     });
                     syncAIProviderToBackend(newProviders);
@@ -331,6 +334,10 @@ export const useDevOpsStore = create<helixState>()(
             updateChatSession: (id, updates) =>
                 set((s) => ({
                     chatSessions: s.chatSessions.map((cs) => (cs.id === id ? { ...cs, ...updates } : cs)),
+                })),
+            togglePinChatSession: (id) =>
+                set((s) => ({
+                    chatSessions: s.chatSessions.map(cs => cs.id === id ? { ...cs, pinned: !cs.pinned } : cs)
                 })),
 
             sendMessage: async (sessionId, content, images) => {
@@ -486,14 +493,14 @@ export const useDevOpsStore = create<helixState>()(
                     },
                 })),
 
-            // ===== Notifications =====
-            addNotificationChannel: (channel) =>
-                set((s) => ({ notificationChannels: [...s.notificationChannels, { ...channel, id: generateId() }] })),
-            removeNotificationChannel: (id) =>
-                set((s) => ({ notificationChannels: s.notificationChannels.filter((c) => c.id !== id) })),
-            updateNotificationChannel: (id, updates) =>
+            // ===== Channels / Bots =====
+            addBotChannel: (channel) =>
+                set((s) => ({ botChannels: [...s.botChannels, { ...channel, id: generateId() }] })),
+            removeBotChannel: (id) =>
+                set((s) => ({ botChannels: s.botChannels.filter((c) => c.id !== id) })),
+            updateBotChannel: (id, updates) =>
                 set((s) => ({
-                    notificationChannels: s.notificationChannels.map((c) => (c.id === id ? { ...c, ...updates } : c)),
+                    botChannels: s.botChannels.map((c) => (c.id === id ? { ...c, ...updates } : c)),
                 })),
 
             // ===== Skills =====
@@ -584,7 +591,7 @@ export const useDevOpsStore = create<helixState>()(
                 alerts: state.alerts,
                 config: state.config,
                 cloudConfig: state.cloudConfig,
-                notificationChannels: state.notificationChannels,
+                botChannels: state.botChannels,
                 skillStates: state.skillStates,
                 customSkills: state.customSkills,
             }),
