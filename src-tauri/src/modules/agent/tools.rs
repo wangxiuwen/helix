@@ -1139,7 +1139,9 @@ pub async fn tool_image_describe(image_path: String, prompt: Option<String>) -> 
 
     let config = crate::modules::config::load_app_config().map_err(|e| format!("config: {}", e))?;
     let ai = &config.ai_config;
-    if ai.api_key.is_empty() { return Err("API key not configured".to_string()); }
+    if ai.api_key.is_empty() && ai.provider != "ollama" && ai.provider != "custom" { 
+        return Err("API key not configured".to_string()); 
+    }
 
     let url_str = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
     let body = json!({

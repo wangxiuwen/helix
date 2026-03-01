@@ -289,7 +289,7 @@ const notificationSkill: OpsSkill = {
             name: 'send_notification',
             description: '发送通知到飞书或钉钉群',
             parameters: {
-                channel: { type: 'string', description: '通知渠道', required: true, enum: ['feishu', 'dingtalk'] },
+                channel: { type: 'string', description: '通知渠道', required: true, enum: ['feishu', 'dingtalk', 'wecom'] },
                 message: { type: 'string', description: '通知内容', required: true },
             },
             execute: async (params: Record<string, any>) => {
@@ -297,7 +297,7 @@ const notificationSkill: OpsSkill = {
                 const channel = notificationChannels?.find(
                     (c: any) => c.type === params.channel && c.enabled
                 );
-                if (!channel) return `未配置或未启用 ${params.channel === 'feishu' ? '飞书' : '钉钉'} 通知渠道`;
+                if (!channel) return `未配置或未启用 ${params.channel === 'feishu' ? '飞书' : params.channel === 'dingtalk' ? '钉钉' : '企业微信'} 通知渠道`;
 
                 const res = await fetch(channel.webhookUrl, {
                     method: 'POST',
@@ -305,12 +305,14 @@ const notificationSkill: OpsSkill = {
                     body: JSON.stringify(
                         params.channel === 'feishu'
                             ? { msg_type: 'text', content: { text: `[helix] ${params.message}` } }
-                            : { msgtype: 'text', text: { content: `[helix] ${params.message}` } }
+                            : params.channel === 'dingtalk'
+                                ? { msgtype: 'markdown', markdown: { title: '通知', text: `[helix] ${params.message}` } }
+                                : { msgtype: 'text', text: { content: `[helix] ${params.message}` } } // WeCom format
                     ),
                 });
 
                 if (!res.ok) throw new Error(`发送通知失败: ${res.statusText}`);
-                return `通知已发送到${params.channel === 'feishu' ? '飞书' : '钉钉'}`;
+                return `通知已发送到${params.channel === 'feishu' ? '飞书' : params.channel === 'dingtalk' ? '钉钉' : '企业微信'}`;
             },
         },
     ],
@@ -988,6 +990,7 @@ allowed-tools: ["send_notification"]
 |------|-----------|------|
 | 飞书 | feishu | webhookUrl |
 | 钉钉 | dingtalk | webhookUrl |
+| 企微 | wecom | webhookUrl |
 | Webhook | webhook | url |
 
 ## 规范

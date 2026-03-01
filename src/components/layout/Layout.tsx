@@ -29,10 +29,9 @@ import {
     RefreshCw,
 } from 'lucide-react';
 
-type SettingsSection = 'appearance' | 'ai' | 'workspace' | 'mcp' | 'environments' | 'about';
+type SettingsSection = 'appearance' | 'ai' | 'workspace' | 'environments' | 'notifications' | 'about';
 
 interface WorkspaceFile { name: string; size: number; modified: string; }
-interface MCPClient { name: string; transport: string; command?: string; args?: string[]; url?: string; env: Record<string, string>; enabled: boolean; }
 interface EnvVar { key: string; value: string; secret: boolean; }
 
 function Layout() {
@@ -63,16 +62,16 @@ function Layout() {
     const [wsOrigContent, setWsOrigContent] = useState('');
     const [wsSaving, setWsSaving] = useState(false);
 
-    // MCP state
-    const [mcpClients, setMcpClients] = useState<MCPClient[]>([]);
-    const [mcpShowCreate, setMcpShowCreate] = useState(false);
-    const [mcpNew, setMcpNew] = useState<MCPClient>({ name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, enabled: true });
-
     // Env state
     const [envVars, setEnvVars] = useState<EnvVar[]>([]);
     const [envShowAdd, setEnvShowAdd] = useState(false);
     const [envNew, setEnvNew] = useState({ key: '', value: '', secret: false });
     const [envShowKeys, setEnvShowKeys] = useState<Record<string, boolean>>({});
+
+    // Notifications state
+    const { notificationChannels, addNotificationChannel, removeNotificationChannel, updateNotificationChannel } = useDevOpsStore();
+    const [notifShowAdd, setNotifShowAdd] = useState(false);
+    const [notifNew, setNotifNew] = useState({ name: '', type: 'feishu' as 'feishu' | 'dingtalk' | 'wecom', webhookUrl: '', enabled: true });
 
     const toggleKey = (id: string) => setShowKeys((p) => ({ ...p, [id]: !p[id] }));
 
@@ -92,10 +91,6 @@ function Layout() {
         } catch (e) { console.error('workspace_list_files', e); }
     }, []);
 
-    const loadMcpClients = useCallback(async () => {
-        try { setMcpClients(await invoke<MCPClient[]>('mcp_list')); } catch (e) { console.error('mcp_list', e); }
-    }, []);
-
     const loadEnvVars = useCallback(async () => {
         try { setEnvVars(await invoke<EnvVar[]>('envs_list')); } catch (e) { console.error('envs_list', e); }
     }, []);
@@ -103,9 +98,8 @@ function Layout() {
     useEffect(() => {
         if (!showSettings) return;
         if (settingsSection === 'workspace') loadWsFiles();
-        if (settingsSection === 'mcp') loadMcpClients();
         if (settingsSection === 'environments') loadEnvVars();
-    }, [showSettings, settingsSection, loadWsFiles, loadMcpClients, loadEnvVars]);
+    }, [showSettings, settingsSection, loadWsFiles, loadEnvVars]);
 
     // Workspace handlers
     const wsSelectFile = async (name: string) => {
@@ -123,19 +117,20 @@ function Layout() {
         setWsSaving(false);
     };
 
-    // MCP handlers
-    const mcpCreate = async () => {
-        try { await invoke<MCPClient>('mcp_create', { client: mcpNew }); setMcpShowCreate(false); setMcpNew({ name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, enabled: true }); loadMcpClients(); } catch (e) { alert(String(e)); }
-    };
-    const mcpToggle = async (name: string) => { try { await invoke<MCPClient>('mcp_toggle', { name }); loadMcpClients(); } catch (e) { console.error(e); } };
-    const mcpDelete = async (name: string) => { try { await invoke('mcp_delete', { name }); loadMcpClients(); } catch (e) { console.error(e); } };
-
     // Env handlers
     const envAdd = async () => {
         if (!envNew.key) return;
         try { await invoke('envs_set', { key: envNew.key, value: envNew.value, secret: envNew.secret }); setEnvNew({ key: '', value: '', secret: false }); setEnvShowAdd(false); loadEnvVars(); } catch (e) { console.error(e); }
     };
     const envDelete = async (key: string) => { try { await invoke('envs_delete', { key }); loadEnvVars(); } catch (e) { console.error(e); } };
+
+    // Notification handlers
+    const notifAdd = () => {
+        if (!notifNew.name || !notifNew.webhookUrl) return;
+        addNotificationChannel(notifNew);
+        setNotifNew({ name: '', type: 'feishu', webhookUrl: '', enabled: true });
+        setNotifShowAdd(false);
+    };
 
     // Close more menu on outside click
     useEffect(() => {
@@ -209,7 +204,7 @@ function Layout() {
         },
         {
             label: 'Ollama (本地)', name: 'Ollama', type: 'ollama' as AIProvider['type'],
-            baseUrl: 'http://localhost:11434', model: 'qwen2',
+            baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5',
             models: [],
         },
         {
@@ -224,8 +219,8 @@ function Layout() {
         { key: 'appearance', icon: Palette, label: t('settings.menu.appearance', '外观'), group: t('settings.groups.general', '通用') },
         { key: 'ai', icon: Bot, label: t('settings.menu.ai_providers', 'AI 提供商'), group: t('settings.groups.general', '通用') },
         { key: 'workspace', icon: FolderOpen, label: t('settings.menu.workspace', '工作空间'), group: t('settings.groups.agent', 'Agent') },
-        { key: 'mcp', icon: Plug, label: t('settings.menu.mcp', 'MCP'), group: t('settings.groups.agent', 'Agent') },
         { key: 'environments', icon: KeyRound, label: t('settings.menu.environments', '环境变量'), group: t('settings.groups.agent', 'Agent') },
+        { key: 'notifications', icon: Activity, label: t('settings.menu.notifications', '消息通知'), group: t('settings.groups.agent', 'Agent') },
         { key: 'about', icon: Globe, label: t('settings.menu.about', '关于'), group: t('settings.groups.other', '其他') },
     ];
 
@@ -389,64 +384,6 @@ function Layout() {
                     </div>
                 );
 
-            case 'mcp':
-                return (
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <h3 className="text-sm font-bold text-gray-800 dark:text-white">{t('settings.mcp.title', 'MCP 客户端')}</h3>
-                            <button className="text-xs text-[#07c160] hover:underline" onClick={() => setMcpShowCreate(!mcpShowCreate)}>
-                                {mcpShowCreate ? t('settings.environments.cancel', '取消') : '+ ' + t('settings.environments.add', '添加')}
-                            </button>
-                        </div>
-
-                        {mcpShowCreate && (
-                            <div className="p-4 bg-white dark:bg-[#2e2e2e] rounded-xl space-y-2">
-                                <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder="名称 (如 tavily_mcp)" value={mcpNew.name} onChange={e => setMcpNew({ ...mcpNew, name: e.target.value })} />
-                                <select className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200" value={mcpNew.transport} onChange={e => setMcpNew({ ...mcpNew, transport: e.target.value })}>
-                                    <option value="stdio">stdio (本地命令)</option>
-                                    <option value="sse">SSE (远程服务)</option>
-                                </select>
-                                {mcpNew.transport === 'stdio' ? (
-                                    <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder="命令 (如 npx -y @tavily/mcp)" value={mcpNew.command || ''} onChange={e => setMcpNew({ ...mcpNew, command: e.target.value })} />
-                                ) : (
-                                    <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder="URL (如 http://localhost:3001/sse)" value={mcpNew.url || ''} onChange={e => setMcpNew({ ...mcpNew, url: e.target.value })} />
-                                )}
-                                <button className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md" onClick={mcpCreate} disabled={!mcpNew.name || (mcpNew.transport === 'stdio' ? !mcpNew.command : !mcpNew.url)}>
-                                    创建
-                                </button>
-                            </div>
-                        )}
-
-                        <div className="space-y-2">
-                            {mcpClients.map(client => (
-                                <div key={client.name} className="p-4 rounded-xl bg-white dark:bg-[#2e2e2e] space-y-2">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{client.name}</span>
-                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-500">{client.transport}</span>
-                                        </div>
-                                        <span className={`text-[10px] ${client.enabled ? 'text-[#07c160]' : 'text-gray-400'}`}>
-                                            ● {client.enabled ? '启用' : '禁用'}
-                                        </span>
-                                    </div>
-                                    <p className="text-[10px] text-gray-400 break-all">{client.transport === 'stdio' ? client.command : client.url}</p>
-                                    <div className="flex gap-2">
-                                        <button className="text-xs text-gray-500 hover:text-[#07c160]" onClick={() => mcpToggle(client.name)}>
-                                            {client.enabled ? '禁用' : '启用'}
-                                        </button>
-                                        <button className="text-xs text-red-400 hover:text-red-500 flex items-center gap-0.5" onClick={() => mcpDelete(client.name)}>
-                                            <Trash2 size={10} /> 删除
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                        {mcpClients.length === 0 && !mcpShowCreate && (
-                            <p className="text-sm text-gray-400 text-center py-6">暂无 MCP 客户端</p>
-                        )}
-                    </div>
-                );
-
             case 'environments':
                 return (
                     <div className="space-y-4">
@@ -495,6 +432,63 @@ function Layout() {
                                 <p className="text-sm text-gray-400 text-center py-6">{t('settings.environments.empty', '暂无环境变量')}</p>
                             )}
                         </div>
+                    </div>
+                );
+
+            case 'notifications':
+                return (
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-bold text-gray-800 dark:text-white">{t('settings.notifications.title', '消息通知设置')}</h3>
+                            <button className="text-xs text-[#07c160] hover:underline" onClick={() => setNotifShowAdd(!notifShowAdd)}>
+                                {notifShowAdd ? t('settings.notifications.cancel', '取消') : '+ ' + t('settings.notifications.add', '添加渠道')}
+                            </button>
+                        </div>
+
+                        {notifShowAdd && (
+                            <div className="p-4 bg-white dark:bg-[#2e2e2e] rounded-xl space-y-2">
+                                <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder="名称 (如 运维二群)" value={notifNew.name} onChange={e => setNotifNew({ ...notifNew, name: e.target.value })} />
+                                <select className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none text-gray-700 dark:text-gray-200" value={notifNew.type} onChange={e => setNotifNew({ ...notifNew, type: e.target.value as any })}>
+                                    <option value="feishu">飞书</option>
+                                    <option value="dingtalk">钉钉</option>
+                                    <option value="wecom">企业微信</option>
+                                </select>
+                                <input className="w-full px-2 py-1.5 text-sm bg-[#f7f7f7] dark:bg-[#3a3a3a] rounded-md border-0 outline-none" placeholder="Webhook URL" value={notifNew.webhookUrl} onChange={e => setNotifNew({ ...notifNew, webhookUrl: e.target.value })} />
+                                <button className="px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-md" onClick={notifAdd} disabled={!notifNew.name || !notifNew.webhookUrl}>
+                                    保存
+                                </button>
+                            </div>
+                        )}
+
+                        <div className="space-y-2">
+                            {notificationChannels.map(channel => (
+                                <div key={channel.id} className="p-4 rounded-xl bg-white dark:bg-[#2e2e2e] space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{channel.name}</span>
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-500">
+                                                {channel.type === 'feishu' ? '飞书' : channel.type === 'dingtalk' ? '钉钉' : '企业微信'}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <div
+                                                className={`relative w-10 h-5 rounded-full cursor-pointer transition-colors ${channel.enabled ? 'bg-[#07c160]' : 'bg-gray-300'}`}
+                                                onClick={() => updateNotificationChannel(channel.id, { enabled: !channel.enabled })}
+                                            >
+                                                <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${channel.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                                            </div>
+                                            <button className="text-red-400 hover:text-red-500" onClick={() => removeNotificationChannel(channel.id)}>
+                                                <Trash2 size={12} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 break-all">{channel.webhookUrl}</p>
+                                </div>
+                            ))}
+                        </div>
+                        {notificationChannels.length === 0 && !notifShowAdd && (
+                            <p className="text-sm text-gray-400 text-center py-6">暂无配置的消息通知渠道</p>
+                        )}
                     </div>
                 );
 
@@ -610,10 +604,10 @@ function Layout() {
             {/* Settings Modal */}
             {showSettings && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                    <div className="bg-[#f5f5f5] dark:bg-[#1e1e1e] rounded-xl shadow-2xl w-[780px] h-[540px] flex overflow-hidden">
+                    <div className="bg-[#f5f5f5] dark:bg-[#1e1e1e] rounded-xl shadow-2xl w-[860px] h-[600px] flex overflow-hidden">
                         {/* Settings sidebar */}
-                        <div className="w-[170px] shrink-0 bg-[#f0f0f0] dark:bg-[#252525] rounded-l-xl py-4 px-2 overflow-y-auto">
-                            <div className="flex items-center px-2 mb-3 relative">
+                        <div className="w-[170px] shrink-0 bg-[#f0f0f0] dark:bg-[#252525] rounded-l-xl pt-4 pb-4 px-2 overflow-y-auto">
+                            <div className="flex items-center justify-between px-2 mb-5 mt-2">
                                 <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => setShowSettings(false)}>
                                     <div className="w-3 h-3 rounded-full bg-[#ff5f56] flex items-center justify-center">
                                         <X size={8} className="text-black/50 opacity-0 group-hover:opacity-100" />
@@ -623,7 +617,8 @@ function Layout() {
                                     <div className="w-3 h-3 rounded-full bg-[#27c93f] flex items-center justify-center">
                                     </div>
                                 </div>
-                                <span className="text-xs font-medium text-gray-400 absolute left-1/2 -translate-x-1/2 pointer-events-none">{t('settings.title', '设置')}</span>
+                                <span className="text-xs font-medium text-gray-400">{t('settings.title', '设置')}</span>
+                                <div className="w-[50px]" />
                             </div>
                             {Object.entries(menuGroups).map(([groupLabel, items]) => (
                                 <div key={groupLabel} className="mb-2">

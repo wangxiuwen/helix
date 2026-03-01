@@ -46,7 +46,7 @@ pub use agent::skills;
 pub use agent::hooks;
 pub use agent::commands;
 pub use agent::memory;
-#[allow(unused_imports)]
+
 pub use agent::sandbox;
 pub use agent::plugins;
 
@@ -74,5 +74,5 @@ pub use browser::engine as browser_engine;
 
 // Top-level re-exports from config
 pub use config::*;
-#[allow(unused_imports)]
+
 pub use logger::*;

@@ -123,7 +123,7 @@ export interface CloudConfig {
 export interface NotificationChannel {
     id: string;
     name: string;
-    type: 'feishu' | 'dingtalk';
+    type: 'feishu' | 'dingtalk' | 'wecom';
     webhookUrl: string;
     enabled: boolean;
 }

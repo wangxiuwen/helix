@@ -462,7 +462,15 @@ pub async fn agent_process_message(
 
     // 3. Build agents-sdk model with configurable base URL
     // SDK api_url is the FULL endpoint (e.g. .../v1/chat/completions), not just base
-    let full_api_url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
+    // For Ollama: ensure /v1 suffix is present for OpenAI-compatible endpoint
+    let effective_base = if (ai.provider == "ollama" || ai.base_url.contains("11434"))
+        && !ai.base_url.contains("/v1")
+    {
+        format!("{}/v1", ai.base_url.trim_end_matches('/'))
+    } else {
+        ai.base_url.clone()
+    };
+    let full_api_url = format!("{}/chat/completions", effective_base.trim_end_matches('/'));
     
     let api_key = if ai.api_key.is_empty() { "dummy" } else { &ai.api_key };
     let oai_config = OpenAiConfig::new(api_key, &ai.model)
