@@ -138,12 +138,13 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
          - `memory_recall` — Recall previously stored information by keyword\n\n",
     );
 
-    let antigravity_context =
-        crate::modules::ai::context::get_antigravity_context(workspace.map(|w| w.to_string()));
-    if !antigravity_context.is_empty() {
+    // Unified context: GEMINI.md + Knowledge Items + Recent Conversations
+    let full_context =
+        crate::modules::ai::context::get_full_context(None, workspace.map(|w| w.to_string()));
+    if !full_context.is_empty() {
         memory_section.push_str(&format!(
-            "### Persistent Context (Antigravity Memory)\n\n{}\n",
-            antigravity_context
+            "### Persistent Context (Brain)\n\n{}\n",
+            full_context
         ));
     }
 
@@ -521,8 +522,9 @@ pub async fn agent_process_message(
         .build()
         .map_err(|e| format!("Agent build failed: {}", e))?;
 
-    // 7. Save user message to DB
+    // 7. Save user message to DB + Brain log
     let _ = database::save_conversation_message(account_id, "user", user_input);
+    let _ = crate::modules::ai::context::log_message(account_id, "user", user_input);
 
     // 8. Load conversation history and build structured context
     let history = database::get_conversation_history(account_id, 20)?;
@@ -596,6 +598,7 @@ pub async fn agent_process_message(
     };
     let clean = clean_response(&text);
     let _ = database::save_conversation_message(account_id, "assistant", &clean);
+    let _ = crate::modules::ai::context::log_message(account_id, "assistant", &clean);
 
     // 10. Background memory compaction (non-blocking, CoPaw-inspired)
     let acct_for_compact = account_id.to_string();

@@ -192,6 +192,11 @@ pub fn run() {
                 error!("Failed to initialize usage tables: {}", e);
             }
 
+            // Initialize Brain (context management)
+            if let Err(e) = modules::ai::context::init_brain() {
+                error!("Failed to initialize brain: {}", e);
+            }
+
             // Initialize log bridge with app handle for debug console
             modules::log_bridge::init_log_bridge(app.handle().clone());
 
@@ -430,8 +435,19 @@ pub fn run() {
             modules::mcp::mcp_toggle,
             modules::mcp::mcp_delete,
             modules::mcp::mcp_update,
-            // AI Context
+            // AI Context (backward compatible)
             modules::ai::context::get_antigravity_context,
+            // Brain — Unified Context Management
+            modules::ai::context::brain_init,
+            modules::ai::context::brain_log_message,
+            modules::ai::context::brain_summarize_conversation,
+            modules::ai::context::brain_list_conversations,
+            modules::ai::context::brain_get_conversation,
+            modules::ai::context::brain_create_knowledge,
+            modules::ai::context::brain_search_knowledge,
+            modules::ai::context::brain_list_knowledge,
+            modules::ai::context::brain_delete_knowledge,
+            modules::ai::context::brain_get_context,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
