@@ -695,7 +695,7 @@ function AIChat() {
                                 </span>
                             )}
                             <div className="flex-1" />
-                            <div className="flex items-center gap-2.5 mr-3" style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as React.CSSProperties}>
+                            <div className="flex items-center gap-1 mr-3" style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as React.CSSProperties}>
                                 <button className="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-gray-700 dark:text-gray-300">
                                     <MessageSquareMore size={22} strokeWidth={1.5} />
                                 </button>
@@ -1208,10 +1208,13 @@ function AIChat() {
                             </div>  {/* end messages+input column */}
 
                             {/* Group member panel — right sidebar for team sessions */}
-                            {showGroupPanel && activeSession.type === 'team' && (() => {
+                            {activeSession.type === 'team' && (() => {
                                 const sessionMembers = (activeSession.members || []).map(id => contacts.find(c => c.id === id)).filter(Boolean) as VirtualContact[];
                                 return (
-                                    <div className="w-[220px] shrink-0 bg-white dark:bg-[#2a2a2a] border-l border-black/[0.06] dark:border-white/[0.06] flex flex-col overflow-y-auto">
+                                    <div
+                                        className={`shrink-0 bg-white dark:bg-[#2a2a2a] border-l border-black/[0.06] dark:border-white/[0.06] flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${showGroupPanel ? 'w-[220px] opacity-100' : 'w-0 opacity-0 border-l-0'
+                                            }`}
+                                    >
                                         {/* Header */}
                                         <div className="px-4 pt-4 pb-2">
                                             <div className="text-[13px] font-medium text-gray-800 dark:text-gray-200">群聊成员</div>
