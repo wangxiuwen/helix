@@ -91,6 +91,7 @@ export interface ChatSession {
     provider?: string;
     agentAvatarUrl?: string; // Optional custom avatar for the agent in this session
     pinned?: boolean; // Pinned to top
+    unreadCount?: number; // Number of unread messages when session is inactive
     createdAt: string;
     updatedAt: string;
 }
@@ -302,7 +303,7 @@ export const useDevOpsStore = create<helixState>()(
             checkServerStatus: async (id) => {
                 const server = get().servers.find((s) => s.id === id);
                 if (!server) return;
-                set((s) => ({ loading: { ...s.loading, [`server-${id}`]: true } }));
+                set((s) => ({ loading: { ...(s.loading || {}), [`server-${id}`]: true } }));
                 try {
                     const url = `http://${server.host}${server.port ? `:${server.port}` : ''}`;
                     const controller = new AbortController();
@@ -363,7 +364,10 @@ export const useDevOpsStore = create<helixState>()(
                     chatSessions: s.chatSessions.filter((cs) => cs.id !== id),
                     activeChatId: s.activeChatId === id ? null : s.activeChatId,
                 })),
-            setActiveChatId: (id) => set({ activeChatId: id }),
+            setActiveChatId: (id) => set((s) => ({
+                activeChatId: id,
+                chatSessions: s.chatSessions.map((cs) => cs.id === id ? { ...cs, unreadCount: 0 } : cs)
+            })),
             updateChatSession: (id, updates) =>
                 set((s) => ({
                     chatSessions: s.chatSessions.map((cs) => (cs.id === id ? { ...cs, ...updates } : cs)),
@@ -388,7 +392,7 @@ export const useDevOpsStore = create<helixState>()(
                             updatedAt: new Date().toISOString(),
                         } : cs
                     ),
-                    loading: { ...s.loading, [`chat-${sessionId}`]: true },
+                    loading: { ...(s.loading || {}), [`chat-${sessionId}`]: true },
                 }));
 
                 try {
@@ -442,27 +446,38 @@ export const useDevOpsStore = create<helixState>()(
                         timestamp: new Date().toISOString(),
                         ...(result.files && result.files.length > 0 ? { files: result.files } : {}),
                     };
-                    set((s) => ({
-                        chatSessions: s.chatSessions.map((cs) =>
-                            cs.id === sessionId ? {
-                                ...cs, messages: [...cs.messages, assistantMsg],
-                                updatedAt: new Date().toISOString(),
-                            } : cs
-                        ),
-                    }));
+                    set((s) => {
+                        const isActive = s.activeChatId === sessionId;
+                        return {
+                            chatSessions: s.chatSessions.map((cs) =>
+                                cs.id === sessionId ? {
+                                    ...cs, messages: [...cs.messages, assistantMsg],
+                                    updatedAt: new Date().toISOString(),
+                                    unreadCount: isActive ? 0 : (cs.unreadCount || 0) + 1,
+                                } : cs
+                            ),
+                        };
+                    });
                 } catch (err: any) {
                     const errorMsg: ChatMessage = {
                         id: generateId(), role: 'assistant',
                         content: `❌ 请求失败: ${typeof err === 'string' ? err : err?.message || JSON.stringify(err)}`,
                         timestamp: new Date().toISOString(),
                     };
-                    set((s) => ({
-                        chatSessions: s.chatSessions.map((cs) =>
-                            cs.id === sessionId ? { ...cs, messages: [...cs.messages, errorMsg], updatedAt: new Date().toISOString() } : cs
-                        ),
-                    }));
+                    set((s) => {
+                        const isActive = s.activeChatId === sessionId;
+                        return {
+                            chatSessions: s.chatSessions.map((cs) =>
+                                cs.id === sessionId ? {
+                                    ...cs, messages: [...cs.messages, errorMsg],
+                                    updatedAt: new Date().toISOString(),
+                                    unreadCount: isActive ? 0 : (cs.unreadCount || 0) + 1,
+                                } : cs
+                            ),
+                        };
+                    });
                 } finally {
-                    set((s) => ({ loading: { ...s.loading, [`chat-${sessionId}`]: false } }));
+                    set((s) => ({ loading: { ...(s.loading || {}), [`chat-${sessionId}`]: false } }));
                 }
             },
 
@@ -659,6 +674,8 @@ export const useDevOpsStore = create<helixState>()(
                         );
                     }
                 }
+                // Ensure loading is initialized properly after hydration
+                if (!persistedState.loading) persistedState.loading = {};
                 return persistedState;
             },
             partialize: (state) => ({

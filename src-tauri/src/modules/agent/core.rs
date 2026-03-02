@@ -490,7 +490,7 @@ pub async fn agent_process_message(
         .with_model(model)
         .with_system_prompt(&system_prompt)
         .with_tools(sdk_tools)
-        .with_max_iterations(usize::MAX)
+        .with_max_iterations(15) // Prevent infinite loops
         .with_checkpointer(Arc::new(InMemoryCheckpointer::new()))
         .build()
         .map_err(|e| format!("Agent build failed: {}", e))?;
