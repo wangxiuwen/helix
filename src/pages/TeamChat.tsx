@@ -58,14 +58,12 @@ export default function TeamChat() {
         }
     };
 
-    // Initial session create
+    // Initial session create (only set active if none is active but there are sessions)
     useEffect(() => {
-        if (!activeTeamSessionId && teamSessions.length === 0) {
-            createTeamSession();
-        } else if (!activeTeamSessionId && teamSessions.length > 0) {
+        if (!activeTeamSessionId && teamSessions.length > 0) {
             setActiveTeamSessionId(teamSessions[0].id);
         }
-    }, [activeTeamSessionId, teamSessions, createTeamSession, setActiveTeamSessionId]);
+    }, [activeTeamSessionId, teamSessions, setActiveTeamSessionId]);
 
     const activeSession = teamSessions.find(s => s.id === activeTeamSessionId);
     const messages = activeSession?.messages || [];
@@ -95,24 +93,35 @@ export default function TeamChat() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!input.trim() || isRunning || !activeTeamSessionId) return;
+        if (!input.trim() || isRunning) return;
 
         const req = input.trim();
         setInput('');
         setIsRunning(true);
 
-        let wsDir = activeSession?.workspace;
-        // Update session title on first message
-        if (messages.length === 0) {
-            useDevOpsStore.getState().updateTeamSession(activeTeamSessionId, { title: req.substring(0, 20) });
+        let targetSessionId = activeTeamSessionId;
+        // Auto-create a session if we are in an empty state
+        if (!targetSessionId) {
+            targetSessionId = useDevOpsStore.getState().createTeamSession(req.substring(0, 20));
+            useDevOpsStore.getState().setActiveTeamSessionId(targetSessionId);
+            // Re-fetch the newly created session state to use below
+        }
+
+        const stateInstance = useDevOpsStore.getState();
+        const freshSession = stateInstance.teamSessions.find(s => s.id === targetSessionId);
+        let wsDir = freshSession?.workspace;
+
+        // Update session title and workspace on very first message
+        if (freshSession?.messages.length === 0 || !wsDir) {
+            useDevOpsStore.getState().updateTeamSession(targetSessionId, { title: req.substring(0, 20) });
             // assign a workspace string for UI context
             const baseDir = await invoke<string>('workspace_get_dir').catch(() => '~/desktop');
-            wsDir = `${baseDir}/sessions/${activeTeamSessionId}`;
-            useDevOpsStore.getState().updateTeamSession(activeTeamSessionId, { workspace: wsDir });
+            wsDir = `${baseDir}/sessions/${targetSessionId}`;
+            useDevOpsStore.getState().updateTeamSession(targetSessionId, { workspace: wsDir });
         }
 
         // Add user message to store
-        addTeamMessage(activeTeamSessionId, { role: 'user', name: '我', content: req, icon: '👤' });
+        useDevOpsStore.getState().addTeamMessage(targetSessionId, { role: 'user', name: '我', content: req, icon: '👤' });
 
         const orchestrator = new TeamOrchestrator();
 
@@ -120,18 +129,18 @@ export default function TeamChat() {
 
         await orchestrator.handleRequest(req, wsDir || '', (evt) => {
             const state = useDevOpsStore.getState();
-            const session = state.teamSessions.find(s => s.id === activeTeamSessionId);
+            const session = state.teamSessions.find(s => s.id === targetSessionId);
             if (!session) return;
 
             if (evt.type === 'progress') {
                 if (pendingProgressId) {
                     const existing = session.messages.find(m => m.id === pendingProgressId);
                     if (existing && existing.role === evt.data.role && existing.isProgress) {
-                        state.updateTeamMessage(activeTeamSessionId, pendingProgressId, { action: evt.data.action });
+                        state.updateTeamMessage(targetSessionId, pendingProgressId, { action: evt.data.action });
                         return;
                     }
                 }
-                pendingProgressId = state.addTeamMessage(activeTeamSessionId, {
+                pendingProgressId = state.addTeamMessage(targetSessionId, {
                     role: evt.data.role,
                     name: evt.data.name,
                     action: evt.data.action,
@@ -142,14 +151,14 @@ export default function TeamChat() {
 
             } else if (evt.type === 'result') {
                 if (pendingProgressId) {
-                    state.updateTeamMessage(activeTeamSessionId, pendingProgressId, {
+                    state.updateTeamMessage(targetSessionId, pendingProgressId, {
                         content: evt.data.content,
                         isProgress: false,
                         action: undefined
                     });
                     pendingProgressId = null;
                 } else {
-                    state.addTeamMessage(activeTeamSessionId, {
+                    state.addTeamMessage(targetSessionId, {
                         role: evt.data.role,
                         name: evt.data.name,
                         content: evt.data.content,
@@ -158,14 +167,14 @@ export default function TeamChat() {
                     });
                 }
             } else if (evt.type === 'group_start') {
-                state.addTeamMessage(activeTeamSessionId, {
+                state.addTeamMessage(targetSessionId, {
                     role: 'system',
                     name: 'System',
                     content: `👨‍💻 **项目组正在开启专题讨论:** ${evt.data.topic}`,
                     icon: '👥'
                 });
             } else if (evt.type === 'error') {
-                state.addTeamMessage(activeTeamSessionId, {
+                state.addTeamMessage(targetSessionId, {
                     role: 'system', name: '系统提示', content: evt.data, icon: '⚠️'
                 });
             } else if (evt.type === 'team_done') {
@@ -319,7 +328,7 @@ export default function TeamChat() {
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
                                 placeholder={isRunning ? "团队推进中..." : "告诉林雨（项目经理），您想要开发点什么..."}
-                                disabled={isRunning || !activeTeamSessionId}
+                                disabled={isRunning}
                                 className="input input-lg input-bordered flex-1 focus:outline-none focus:ring-2 focus:ring-primary/20 bg-white dark:bg-base-200 shadow-sm transition-shadow rounded-2xl"
                             />
                             <button
