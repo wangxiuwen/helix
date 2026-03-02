@@ -39,11 +39,14 @@ import {
     Sparkles,
     Square,
     User,
+    Users,
     Wrench,
     X,
     Download
 } from 'lucide-react';
-import { useDevOpsStore, AIProvider } from '../stores/useDevOpsStore';
+import { TeamOrchestrator } from '../services/team/orchestrator';
+import { getRole } from '../services/team/roles';
+import { useDevOpsStore, AIProvider, VirtualContact } from '../stores/useDevOpsStore';
 import { useConfigStore } from '../stores/useConfigStore';
 import { AvatarPicker } from '../components/common/AvatarPicker';
 import { invoke } from '@tauri-apps/api/core';
@@ -113,7 +116,16 @@ function AIChat() {
         togglePinChatSession,
         aiProviders,
         loading,
+        addTeamChatMessage,
+        updateTeamChatMessage,
+        contacts,
     } = useDevOpsStore();
+
+    const [isTeamRunning, setIsTeamRunning] = useState(false);
+    const [showGroupPanel, setShowGroupPanel] = useState(false);
+    const [showContactPicker, setShowContactPicker] = useState(false);
+    const [contactPickerSearch, setContactPickerSearch] = useState('');
+    const [selectedToAdd, setSelectedToAdd] = useState<string[]>([]);
 
     const isSessionLoading = !!useDevOpsStore(s => s.loading[`chat-${activeChatId}`]);
 
@@ -157,6 +169,18 @@ function AIChat() {
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, sessionId: string } | null>(null);
     const contextMenuRef = useRef<HTMLDivElement>(null);
     const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+    const [showNewMenu, setShowNewMenu] = useState(false);
+    const newMenuRef = useRef<HTMLDivElement>(null);
+    const [showMentionPopup, setShowMentionPopup] = useState(false);
+    const [mentionFilter, setMentionFilter] = useState('');
+    const [mentionIndex, setMentionIndex] = useState(0);
+
+    // Compute mention list for keyboard nav + rendering
+    const mentionList = (() => {
+        if (!showMentionPopup || activeSession?.type !== 'team') return [];
+        const sessionMembers = (activeSession.members || []).map(id => (contacts || []).find(c => c.id === id)).filter(Boolean) as VirtualContact[];
+        return sessionMembers.filter(c => !mentionFilter || c.name.includes(mentionFilter) || c.role.includes(mentionFilter));
+    })();
 
     // Setup DnD sensors
     const sensors = useSensors(
@@ -217,6 +241,7 @@ function AIChat() {
             if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) setShowModelMenu(false);
             if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) setContextMenu(null);
             else if (!contextMenuRef.current) setContextMenu(null);
+            if (newMenuRef.current && !newMenuRef.current.contains(e.target as Node)) setShowNewMenu(false);
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
@@ -253,13 +278,56 @@ function AIChat() {
 
     // ── Input helpers ─────────────────────────────────────
     const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setInput(e.target.value);
+        const val = e.target.value;
+        setInput(val);
         const el = textareaRef.current;
         if (el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; }
+
+        // @ mention detection for team sessions
+        if (activeSession?.type === 'team') {
+            const cursor = el?.selectionStart || val.length;
+            const textBefore = val.substring(0, cursor);
+            const atMatch = textBefore.match(/@([^@\s]*)$/);
+            if (atMatch) {
+                setShowMentionPopup(true);
+                setMentionFilter(atMatch[1]);
+                setMentionIndex(0);
+            } else {
+                setShowMentionPopup(false);
+                setMentionFilter('');
+            }
+        }
+    };
+
+    const insertMention = (contact: VirtualContact) => {
+        const el = textareaRef.current;
+        const cursor = el?.selectionStart || input.length;
+        const textBefore = input.substring(0, cursor);
+        const textAfter = input.substring(cursor);
+        const atIdx = textBefore.lastIndexOf('@');
+        if (atIdx >= 0) {
+            const newText = textBefore.substring(0, atIdx) + `@${contact.name} ` + textAfter;
+            setInput(newText);
+            setShowMentionPopup(false);
+            setMentionFilter('');
+            setTimeout(() => {
+                if (el) {
+                    const newCursor = atIdx + contact.name.length + 2;
+                    el.selectionStart = newCursor;
+                    el.selectionEnd = newCursor;
+                    el.focus();
+                }
+            }, 0);
+        }
     };
 
     const handleSend = async () => {
-        if ((!input.trim() && pendingImages.length === 0) || isSessionLoading) return;
+        if ((!input.trim() && pendingImages.length === 0) || isSessionLoading || isTeamRunning) return;
+        // Route to team handler for team sessions
+        if (activeSession?.type === 'team') {
+            await handleTeamSend();
+            return;
+        }
         setAgentStatus([]);
         const msg = input.trim();
         const imgs = [...pendingImages];
@@ -271,7 +339,118 @@ function AIChat() {
         await sendMessage(sid!, msg || '(图片)', imgs.length > 0 ? imgs : undefined);
     };
 
+    const handleTeamSend = async () => {
+        if (!input.trim()) return;
+        const req = input.trim();
+        setInput('');
+        if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        setIsTeamRunning(true);
+
+        // Extract @mentions from the message
+        const mentionedNames = Array.from(req.matchAll(/@([^\s@]+)/g)).map(m => m[1]);
+        const mentionedContacts = mentionedNames
+            .map(name => (contacts || []).find(c => c.name === name))
+            .filter(Boolean) as VirtualContact[];
+
+        let targetSessionId = activeChatId;
+        if (!targetSessionId) {
+            targetSessionId = createChatSession(req.substring(0, 20), undefined, 'team');
+        }
+
+        const state = useDevOpsStore.getState();
+        const freshSession = state.chatSessions.find(s => s.id === targetSessionId);
+        let wsDir = freshSession?.workspace;
+
+        if (freshSession?.messages.length === 0 || !wsDir) {
+            updateChatSession(targetSessionId!, { title: req.substring(0, 20) });
+            const baseDir = await invoke<string>('workspace_get_dir').catch(() => '~/desktop');
+            wsDir = `${baseDir}/sessions/${targetSessionId}`;
+            updateChatSession(targetSessionId!, { workspace: wsDir });
+        }
+
+        addTeamChatMessage(targetSessionId!, { role: 'user', content: req, name: '我', icon: '👤' });
+
+        const orchestrator = new TeamOrchestrator();
+        let pendingProgressId: string | null = null;
+
+        // If @mentioned specific members, delegate to them directly instead of PM
+        if (mentionedContacts.length > 0) {
+            for (const mc of mentionedContacts) {
+                addTeamChatMessage(targetSessionId!, {
+                    role: 'system', name: 'System',
+                    content: `🎯 已将消息定向发送给 **${mc.name}** (${mc.role})`,
+                    icon: '📌',
+                });
+            }
+        }
+        const mentionedRoles = mentionedContacts.map(mc => ({
+            role: mc.role, name: mc.name, systemPrompt: mc.systemPrompt,
+        }));
+        const mentionedArg = mentionedRoles.length > 0 ? mentionedRoles : undefined;
+        await orchestrator.handleRequest(req, wsDir || '', (evt: any) => {
+            const st = useDevOpsStore.getState();
+            const session = st.chatSessions.find(s => s.id === targetSessionId);
+            if (!session) return;
+
+            if (evt.type === 'progress') {
+                if (pendingProgressId) {
+                    const existing = session.messages.find(m => m.id === pendingProgressId);
+                    if (existing && existing.role === evt.data.role && existing.isProgress) {
+                        updateTeamChatMessage(targetSessionId!, pendingProgressId, { action: evt.data.action });
+                        return;
+                    }
+                }
+                pendingProgressId = addTeamChatMessage(targetSessionId!, {
+                    role: evt.data.role,
+                    name: evt.data.name,
+                    action: evt.data.action,
+                    content: '',
+                    icon: getRole(evt.data.role)?.icon || '🤖',
+                    avatar: getRole(evt.data.role)?.avatar,
+                    isProgress: true,
+                });
+            } else if (evt.type === 'result') {
+                if (pendingProgressId) {
+                    updateTeamChatMessage(targetSessionId!, pendingProgressId, {
+                        content: evt.data.content,
+                        isProgress: false,
+                        action: undefined,
+                    });
+                    pendingProgressId = null;
+                } else {
+                    addTeamChatMessage(targetSessionId!, {
+                        role: evt.data.role,
+                        name: evt.data.name,
+                        content: evt.data.content,
+                        icon: getRole(evt.data.role)?.icon || '🤖',
+                        avatar: getRole(evt.data.role)?.avatar,
+                    });
+                }
+            } else if (evt.type === 'group_start') {
+                addTeamChatMessage(targetSessionId!, {
+                    role: 'system',
+                    name: 'System',
+                    content: `👨‍💻 **项目组正在开启专题讨论:** ${evt.data.topic}`,
+                    icon: '👥',
+                });
+            } else if (evt.type === 'error') {
+                addTeamChatMessage(targetSessionId!, {
+                    role: 'system', name: '系统提示', content: evt.data, icon: '⚠️',
+                });
+            } else if (evt.type === 'team_done') {
+                setIsTeamRunning(false);
+                pendingProgressId = null;
+            }
+        }, mentionedArg);
+    };
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (showMentionPopup && mentionList.length > 0) {
+            if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIndex(i => (i + 1) % mentionList.length); return; }
+            if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIndex(i => (i - 1 + mentionList.length) % mentionList.length); return; }
+            if (e.key === 'Enter') { e.preventDefault(); insertMention(mentionList[mentionIndex]); return; }
+            if (e.key === 'Escape') { e.preventDefault(); setShowMentionPopup(false); return; }
+        }
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
     };
 
@@ -340,13 +519,31 @@ function AIChat() {
                             onChange={(e) => setSearchQuery(e.target.value)}
                         />
                     </div>
-                    <button
-                        className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:bg-black/8 dark:hover:bg-white/10 transition-colors shrink-0"
-                        onClick={() => createChatSession()}
-                        title={t('chat.new_session', '新对话')}
-                    >
-                        <Plus size={15} />
-                    </button>
+                    <div className="relative" ref={newMenuRef}>
+                        <button
+                            className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:bg-black/8 dark:hover:bg-white/10 transition-colors shrink-0"
+                            onClick={() => setShowNewMenu(!showNewMenu)}
+                            title={t('chat.new_session', '新对话')}
+                        >
+                            <Plus size={15} />
+                        </button>
+                        {showNewMenu && (
+                            <div className="absolute right-0 top-full mt-1 min-w-[140px] bg-white dark:bg-[#2b2b2b] rounded-lg shadow-[0_5px_15px_rgba(0,0,0,0.1)] dark:shadow-[0_5px_15px_rgba(0,0,0,0.3)] ring-1 ring-black/5 dark:ring-white/5 py-1.5 px-1.5 z-50 flex flex-col gap-0.5">
+                                <button
+                                    className="w-full text-left px-3 py-2 rounded-md text-[13px] text-gray-800 dark:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors flex items-center gap-2"
+                                    onClick={() => { createChatSession(); setShowNewMenu(false); }}
+                                >
+                                    <Bot size={14} className="text-[#07c160]" /> {t('chat.new_chat', '新对话')}
+                                </button>
+                                <button
+                                    className="w-full text-left px-3 py-2 rounded-md text-[13px] text-gray-800 dark:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors flex items-center gap-2"
+                                    onClick={() => { createChatSession(undefined, undefined, 'team'); setShowNewMenu(false); }}
+                                >
+                                    <Users size={14} className="text-indigo-500" /> {t('chat.new_group', '新建群聊')}
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto">
@@ -473,19 +670,26 @@ function AIChat() {
                             data-tauri-drag-region
                         >
                             <div
-                                className={`w-7 h-7 rounded-sm overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity mr-3 ${activeSession.agentAvatarUrl ? 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5' : 'bg-gradient-to-br from-[#07c160] to-[#05a050]'}`}
-                                onClick={() => setShowAvatarPicker(true)}
-                                title={t('chat.change_avatar', '更换助手头像')}
+                                className={`w-7 h-7 rounded-sm overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity mr-3 ${activeSession.type === 'team' ? 'bg-gradient-to-br from-indigo-500 to-purple-500' : activeSession.agentAvatarUrl ? 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5' : 'bg-gradient-to-br from-[#07c160] to-[#05a050]'}`}
+                                onClick={() => activeSession.type !== 'team' && setShowAvatarPicker(true)}
+                                title={activeSession.type === 'team' ? '多智能体群聊' : t('chat.change_avatar', '更换助手头像')}
                                 style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                             >
-                                {activeSession.agentAvatarUrl ? (
+                                {activeSession.type === 'team' ? (
+                                    <Users size={14} className="text-white" />
+                                ) : activeSession.agentAvatarUrl ? (
                                     <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-full h-full object-cover" />
                                 ) : (
                                     <Bot size={16} className="text-white" />
                                 )}
                             </div>
                             <h3 className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate pointer-events-none">{activeSession.title}</h3>
-                            {activeSession.workspace && (
+                            {activeSession.type === 'team' && (
+                                <span className="text-[11px] text-indigo-500 ml-2 flex items-center gap-1 pointer-events-none">
+                                    <Sparkles size={11} /> Multi-Agent
+                                </span>
+                            )}
+                            {activeSession.type !== 'team' && activeSession.workspace && (
                                 <span className="text-[11px] text-gray-400 ml-2 flex items-center gap-1 pointer-events-none">
                                     <FolderOpen size={11} />{activeSession.workspace}
                                 </span>
@@ -498,196 +702,227 @@ function AIChat() {
                                 <button className="px-2 py-1.5 rounded-md bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 transition-colors text-gray-800 dark:text-gray-200">
                                     <ChevronDown size={16} strokeWidth={2.5} />
                                 </button>
-                                <button className="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-gray-800 dark:text-gray-200">
+                                <button
+                                    className={`p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors ${showGroupPanel && activeSession.type === 'team' ? 'text-[#07c160] bg-black/5 dark:bg-white/5' : 'text-gray-800 dark:text-gray-200'}`}
+                                    onClick={() => {
+                                        if (activeSession.type === 'team') {
+                                            setShowGroupPanel(!showGroupPanel);
+                                            if (showGroupPanel) setShowContactPicker(false);
+                                        }
+                                    }}
+                                >
                                     <MoreHorizontal size={22} strokeWidth={2} />
                                 </button>
                             </div>
                         </div>
 
-                        {/* messages */}
-                        <div className="flex-1 overflow-y-auto px-4 py-5 space-y-4">
-                            {activeSession.messages.length === 0 && (
-                                <div className="text-center py-12 text-gray-400">
-                                    <Bot size={36} className="mx-auto mb-3 opacity-20" />
-                                    <p className="text-xs">{t('chat.empty_hint', '发送消息开始对话')}</p>
-                                </div>
-                            )}
-                            {activeSession.messages.map((msg) => (
-                                <div key={msg.id} className={`flex gap-2.5 group/msg ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                                    <div
-                                        className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center mt-0.5 overflow-hidden shadow-sm ${msg.role === 'user'
-                                            ? config?.appAvatarUrl ? 'bg-white dark:bg-[#404040]' : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5'
-                                            : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5 cursor-pointer hover:shadow-md transition-shadow'
-                                            }`}
-                                        onClick={() => {
-                                            if (msg.role !== 'user') setShowAvatarPicker(true);
-                                        }}
-                                        title={msg.role !== 'user' ? t('chat.change_avatar', '更换助手头像') : undefined}
-                                    >
-                                        {msg.role === 'user'
-                                            ? config?.appAvatarUrl
-                                                ? <img src={config.appAvatarUrl} alt="User" className="w-[85%] h-[85%] object-cover rounded-full" />
-                                                : <User size={15} className="text-gray-700 dark:text-gray-300" />
-                                            : activeSession.agentAvatarUrl
-                                                ? <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
-                                                : <Bot size={15} className="text-[#07c160]" />
-                                        }
-                                    </div>
-                                    <div className="max-w-[65%]">
-                                        <div className={`rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed ${msg.role === 'user'
-                                            ? 'bg-[#95ec69] dark:bg-[#3eb575] text-gray-900 dark:text-white rounded-tr-sm'
-                                            : 'bg-white dark:bg-[#2c2c2c] text-gray-800 dark:text-gray-200 rounded-tl-sm shadow-sm'
-                                            }`}>
-                                            <div id={`msg-content-${msg.id}`} className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-100 [&_pre]:dark:bg-gray-800 [&_pre]:rounded-lg [&_pre]:p-2.5 [&_pre]:overflow-x-auto [&_pre]:text-xs [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm">
-                                                {msg.images && msg.images.length > 0 && (
-                                                    <div className="flex gap-1.5 flex-wrap mb-2 not-prose">
-                                                        {msg.images.map((img, i) => (
-                                                            <img key={i} src={img} alt="" className="max-w-[200px] max-h-[200px] rounded-lg object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => window.open(img, '_blank')} />
-                                                        ))}
-                                                    </div>
-                                                )}
-                                                {msg.content !== '(图片)' && (() => {
-                                                    // Parse __FILE_ATTACHMENT__ markers out of message content
-                                                    const parts = msg.content.split(/(__FILE_ATTACHMENT__\{.*?\}(?=__|$))/s);
-                                                    return parts.map((part, i) => {
-                                                        if (part.startsWith('__FILE_ATTACHMENT__')) {
-                                                            try {
-                                                                const jsonStr = part.slice('__FILE_ATTACHMENT__'.length);
-                                                                const att = JSON.parse(jsonStr);
-                                                                return (
-                                                                    <div key={i} className="not-prose my-2 flex items-center gap-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
-                                                                        <div className="text-2xl shrink-0">
-                                                                            {att.mime?.startsWith('image/') ? '🖼️' : att.mime === 'application/pdf' ? '📄' : att.mime?.includes('zip') ? '📦' : '📁'}
-                                                                        </div>
-                                                                        <div className="flex-1 min-w-0">
-                                                                            <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{att.name}</div>
-                                                                            <div className="text-xs text-gray-500">{att.size}</div>
-                                                                        </div>
-                                                                        <button
-                                                                            className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium"
-                                                                            onClick={() => {
-                                                                                const a = document.createElement('a');
-                                                                                a.href = `data:${att.mime};base64,${att.data}`;
-                                                                                a.download = att.name;
-                                                                                a.click();
-                                                                            }}
-                                                                        >
-                                                                            {t('chat.download', '⬇ 下载')}
-                                                                        </button>
-                                                                    </div>
-                                                                );
-                                                            } catch { return null; }
-                                                        }
-                                                        return part.trim() ? <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{part}</ReactMarkdown> : null;
-                                                    });
-                                                })()}
+                        <div className="flex flex-1 overflow-hidden">
+                            {/* Left: messages + input column */}
+                            <div className="flex-1 flex flex-col overflow-hidden">
+                                {/* messages */}
+                                <div className="flex-1 overflow-y-auto px-4 py-5 space-y-4">
+                                    {activeSession.messages.length === 0 && (
+                                        <div className="text-center py-12 text-gray-400">
+                                            <Bot size={36} className="mx-auto mb-3 opacity-20" />
+                                            <p className="text-xs">{t('chat.empty_hint', '发送消息开始对话')}</p>
+                                        </div>
+                                    )}
+                                    {activeSession.messages.map((msg) => (
+                                        <div key={msg.id} className={`flex gap-2.5 group/msg ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                                            <div
+                                                className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center mt-0.5 overflow-hidden shadow-sm ${msg.role === 'user'
+                                                    ? config?.app_avatar_url ? 'bg-white dark:bg-[#404040]' : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5'
+                                                    : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5 cursor-pointer hover:shadow-md transition-shadow'
+                                                    }`}
+                                                onClick={() => {
+                                                    if (msg.role !== 'user' && activeSession.type !== 'team') setShowAvatarPicker(true);
+                                                }}
+                                                title={msg.role !== 'user' && activeSession.type !== 'team' ? t('chat.change_avatar', '更换助手头像') : (activeSession.type === 'team' && msg.name ? msg.name : undefined)}
+                                            >
+                                                {activeSession.type === 'team' && msg.avatar
+                                                    ? <img src={msg.avatar} alt="" className="w-full h-full object-cover" />
+                                                    : activeSession.type === 'team' && msg.icon
+                                                        ? <span className="text-base leading-none">{msg.icon}</span>
+                                                        : msg.role === 'user'
+                                                            ? config?.app_avatar_url
+                                                                ? <img src={config.app_avatar_url} alt="User" className="w-[85%] h-[85%] object-cover rounded-full" />
+                                                                : <User size={15} className="text-gray-700 dark:text-gray-300" />
+                                                            : activeSession.agentAvatarUrl
+                                                                ? <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
+                                                                : <Bot size={15} className="text-[#07c160]" />
+                                                }
                                             </div>
-                                            {msg.toolCalls && msg.toolCalls.length > 0 && (
-                                                <div className="mt-2 space-y-1">
-                                                    {msg.toolCalls.map((tc: any, i: number) => (
-                                                        <details key={i} className="group/tc rounded-lg bg-gray-50 dark:bg-gray-800/50 overflow-hidden">
-                                                            <summary className="flex items-center gap-1.5 text-xs px-2 py-1.5 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-gray-700/50">
-                                                                <ChevronRight size={10} className="group-open/tc:rotate-90 transition-transform text-gray-400 shrink-0" />
-                                                                <Wrench size={10} className="text-[#07c160] shrink-0" />
-                                                                <span className="font-mono">{tc.name}</span>
-                                                                <span className={`ml-auto text-[10px] ${tc.status === 'done' ? 'text-green-500' : 'text-red-500'}`}>{tc.status === 'done' ? '✓' : '✗'}</span>
-                                                            </summary>
-                                                            <div className="px-2 pb-1.5 text-[11px] font-mono text-gray-500 whitespace-pre-wrap max-h-32 overflow-y-auto border-t border-gray-200 dark:border-gray-700">
-                                                                {tc.result?.slice(0, 500) || '(no result)'}
-                                                            </div>
-                                                        </details>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            {msg.pendingConfirm && (
-                                                <div className="mt-2 flex gap-2">
-                                                    <button className="px-3 py-1 text-xs bg-[#07c160] text-white rounded-full hover:bg-[#06ad56]" onClick={() => confirmToolExecution(activeChatId!, msg.id)}>
-                                                        <Check size={11} className="inline mr-1" />{t('chat.confirm', '确认')}
-                                                    </button>
-                                                    <button className="px-3 py-1 text-xs bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full">
-                                                        <X size={11} className="inline mr-1" />{t('chat.cancel', '取消')}
-                                                    </button>
-                                                </div>
-                                            )}
-                                            {msg.files && msg.files.length > 0 && (
-                                                <div className="mt-2 space-y-2">
-                                                    {msg.files.map((f, i) => (
-                                                        <div key={i} className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
-                                                            <div className="text-2xl shrink-0">
-                                                                {f.mime?.startsWith('image/') ? '🖼️' : f.mime === 'application/pdf' ? '📄' : f.mime?.includes('zip') ? '📦' : '📁'}
-                                                            </div>
-                                                            <div className="flex-1 min-w-0">
-                                                                <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{f.name}</div>
-                                                                <div className="text-xs text-gray-500">{f.size}</div>
-                                                            </div>
-                                                            <button
-                                                                className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium flex items-center gap-1"
-                                                                onClick={async () => {
-                                                                    try {
-                                                                        const { save } = await import('@tauri-apps/plugin-dialog');
-                                                                        const dest = await save({ defaultPath: f.name });
-                                                                        if (dest) {
-                                                                            const { invoke } = await import('@tauri-apps/api/core');
-                                                                            await invoke('save_file_to', { source: f.path, destination: dest });
-                                                                        }
-                                                                    } catch (e) { console.error('Save failed:', e); }
-                                                                }}
-                                                            >
-                                                                {t('chat.save_as', '⬇ 另存为')}
-                                                            </button>
+                                            <div className={`max-w-[65%] ${msg.role === 'user' ? 'items-end' : ''}`}>
+                                                {activeSession.type === 'team' && msg.name && msg.role !== 'user' && (
+                                                    <div className="text-[11px] font-medium text-gray-400 dark:text-gray-500 px-1 mb-1">{msg.name}</div>
+                                                )}
+                                                <div className={`rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed ${msg.role === 'user'
+                                                    ? 'bg-[#95ec69] dark:bg-[#3eb575] text-gray-900 dark:text-white rounded-tr-sm'
+                                                    : msg.role === 'system' && activeSession.type === 'team'
+                                                        ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 border border-amber-200/30 dark:border-amber-700/30 rounded-tl-sm text-[12px]'
+                                                        : msg.isProgress
+                                                            ? 'bg-white dark:bg-[#2c2c2c] text-gray-500 rounded-tl-sm shadow-sm border border-black/5 dark:border-white/5'
+                                                            : 'bg-white dark:bg-[#2c2c2c] text-gray-800 dark:text-gray-200 rounded-tl-sm shadow-sm'
+                                                    }`}>
+                                                    {msg.isProgress ? (
+                                                        <div className="flex items-center gap-2 text-[12px] font-medium">
+                                                            <span className="loading loading-dots loading-xs text-indigo-500" />
+                                                            <span>{msg.action}</span>
                                                         </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            {/* Beautiful copy and PDF buttons integrated inside bottom right corner of agent message */}
-                                            {msg.role !== 'user' && (
-                                                <div className="flex justify-end mt-1.5 -mb-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity gap-1">
-                                                    <button
-                                                        className="flex items-center gap-1 px-1.5 py-1 text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 rounded transition-colors"
-                                                        title={t('chat.export_pdf', '导出 PDF')}
-                                                        onClick={async (e) => {
-                                                            const btn = e.currentTarget;
-                                                            const originalHTML = btn.innerHTML;
-                                                            btn.innerHTML = `<span class="loading loading-spinner w-3 h-3 text-gray-400" align="center"></span><span style="margin-left:4px">导出中</span>`;
-                                                            btn.disabled = true;
-                                                            try {
-                                                                const sourceElement = document.getElementById(`msg-content-${msg.id}`);
-                                                                if (sourceElement) {
-                                                                    // Create a hidden iframe for printing
-                                                                    const iframe = document.createElement('iframe');
-                                                                    iframe.style.position = 'absolute';
-                                                                    iframe.style.width = '0px';
-                                                                    iframe.style.height = '0px';
-                                                                    iframe.style.border = 'none';
-                                                                    document.body.appendChild(iframe);
+                                                    ) : (
+                                                        <>
+                                                            <div id={`msg-content-${msg.id}`} className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-100 [&_pre]:dark:bg-gray-800 [&_pre]:rounded-lg [&_pre]:p-2.5 [&_pre]:overflow-x-auto [&_pre]:text-xs [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm">
+                                                                {msg.images && msg.images.length > 0 && (
+                                                                    <div className="flex gap-1.5 flex-wrap mb-2 not-prose">
+                                                                        {msg.images.map((img, i) => (
+                                                                            <img key={i} src={img} alt="" className="max-w-[200px] max-h-[200px] rounded-lg object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => window.open(img, '_blank')} />
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                                {msg.content !== '(图片)' && (() => {
+                                                                    // Parse __FILE_ATTACHMENT__ markers out of message content
+                                                                    const parts = msg.content.split(/(__FILE_ATTACHMENT__\{.*?\}(?=__|$))/s);
+                                                                    return parts.map((part, i) => {
+                                                                        if (part.startsWith('__FILE_ATTACHMENT__')) {
+                                                                            try {
+                                                                                const jsonStr = part.slice('__FILE_ATTACHMENT__'.length);
+                                                                                const att = JSON.parse(jsonStr);
+                                                                                return (
+                                                                                    <div key={i} className="not-prose my-2 flex items-center gap-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                                                                                        <div className="text-2xl shrink-0">
+                                                                                            {att.mime?.startsWith('image/') ? '🖼️' : att.mime === 'application/pdf' ? '📄' : att.mime?.includes('zip') ? '📦' : '📁'}
+                                                                                        </div>
+                                                                                        <div className="flex-1 min-w-0">
+                                                                                            <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{att.name}</div>
+                                                                                            <div className="text-xs text-gray-500">{att.size}</div>
+                                                                                        </div>
+                                                                                        <button
+                                                                                            className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium"
+                                                                                            onClick={() => {
+                                                                                                const a = document.createElement('a');
+                                                                                                a.href = `data:${att.mime};base64,${att.data}`;
+                                                                                                a.download = att.name;
+                                                                                                a.click();
+                                                                                            }}
+                                                                                        >
+                                                                                            {t('chat.download', '⬇ 下载')}
+                                                                                        </button>
+                                                                                    </div>
+                                                                                );
+                                                                            } catch { return null; }
+                                                                        }
+                                                                        return part.trim() ? <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{part}</ReactMarkdown> : null;
+                                                                    });
+                                                                })()}
+                                                            </div>
+                                                            {msg.toolCalls && msg.toolCalls.length > 0 && (
+                                                                <div className="mt-2 space-y-1">
+                                                                    {msg.toolCalls.map((tc: any, i: number) => (
+                                                                        <details key={i} className="group/tc rounded-lg bg-gray-50 dark:bg-gray-800/50 overflow-hidden">
+                                                                            <summary className="flex items-center gap-1.5 text-xs px-2 py-1.5 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-gray-700/50">
+                                                                                <ChevronRight size={10} className="group-open/tc:rotate-90 transition-transform text-gray-400 shrink-0" />
+                                                                                <Wrench size={10} className="text-[#07c160] shrink-0" />
+                                                                                <span className="font-mono">{tc.name}</span>
+                                                                                <span className={`ml-auto text-[10px] ${tc.status === 'done' ? 'text-green-500' : 'text-red-500'}`}>{tc.status === 'done' ? '✓' : '✗'}</span>
+                                                                            </summary>
+                                                                            <div className="px-2 pb-1.5 text-[11px] font-mono text-gray-500 whitespace-pre-wrap max-h-32 overflow-y-auto border-t border-gray-200 dark:border-gray-700">
+                                                                                {tc.result?.slice(0, 500) || '(no result)'}
+                                                                            </div>
+                                                                        </details>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                            {msg.pendingConfirm && (
+                                                                <div className="mt-2 flex gap-2">
+                                                                    <button className="px-3 py-1 text-xs bg-[#07c160] text-white rounded-full hover:bg-[#06ad56]" onClick={() => confirmToolExecution(activeChatId!, msg.id)}>
+                                                                        <Check size={11} className="inline mr-1" />{t('chat.confirm', '确认')}
+                                                                    </button>
+                                                                    <button className="px-3 py-1 text-xs bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full">
+                                                                        <X size={11} className="inline mr-1" />{t('chat.cancel', '取消')}
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                            {msg.files && msg.files.length > 0 && (
+                                                                <div className="mt-2 space-y-2">
+                                                                    {msg.files.map((f, i) => (
+                                                                        <div key={i} className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                                                                            <div className="text-2xl shrink-0">
+                                                                                {f.mime?.startsWith('image/') ? '🖼️' : f.mime === 'application/pdf' ? '📄' : f.mime?.includes('zip') ? '📦' : '📁'}
+                                                                            </div>
+                                                                            <div className="flex-1 min-w-0">
+                                                                                <div className="text-sm font-medium truncate text-gray-800 dark:text-gray-200">{f.name}</div>
+                                                                                <div className="text-xs text-gray-500">{f.size}</div>
+                                                                            </div>
+                                                                            <button
+                                                                                className="shrink-0 px-3 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] text-white rounded-lg transition-colors font-medium flex items-center gap-1"
+                                                                                onClick={async () => {
+                                                                                    try {
+                                                                                        const { save } = await import('@tauri-apps/plugin-dialog');
+                                                                                        const dest = await save({ defaultPath: f.name });
+                                                                                        if (dest) {
+                                                                                            const { invoke } = await import('@tauri-apps/api/core');
+                                                                                            await invoke('save_file_to', { source: f.path, destination: dest });
+                                                                                        }
+                                                                                    } catch (e) { console.error('Save failed:', e); }
+                                                                                }}
+                                                                            >
+                                                                                {t('chat.save_as', '⬇ 另存为')}
+                                                                            </button>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                            {/* Beautiful copy and PDF buttons integrated inside bottom right corner of agent message */}
+                                                        </>
+                                                    )}
+                                                    {msg.role !== 'user' && !msg.isProgress && (
+                                                        <div className="flex justify-end mt-1.5 -mb-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity gap-1">
+                                                            <button
+                                                                className="flex items-center gap-1 px-1.5 py-1 text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 rounded transition-colors"
+                                                                title={t('chat.export_pdf', '导出 PDF')}
+                                                                onClick={async (e) => {
+                                                                    const btn = e.currentTarget;
+                                                                    const originalHTML = btn.innerHTML;
+                                                                    btn.innerHTML = `<span class="loading loading-spinner w-3 h-3 text-gray-400" align="center"></span><span style="margin-left:4px">导出中</span>`;
+                                                                    btn.disabled = true;
+                                                                    try {
+                                                                        const sourceElement = document.getElementById(`msg-content-${msg.id}`);
+                                                                        if (sourceElement) {
+                                                                            // Create a hidden iframe for printing
+                                                                            const iframe = document.createElement('iframe');
+                                                                            iframe.style.position = 'absolute';
+                                                                            iframe.style.width = '0px';
+                                                                            iframe.style.height = '0px';
+                                                                            iframe.style.border = 'none';
+                                                                            document.body.appendChild(iframe);
 
-                                                                    const doc = iframe.contentWindow?.document;
-                                                                    if (doc) {
-                                                                        // Get all stylesheets and styles from the parent document
-                                                                        const styles = Array.from(document.styleSheets)
-                                                                            .map(styleSheet => {
-                                                                                try {
-                                                                                    return Array.from(styleSheet.cssRules)
-                                                                                        .map(rule => rule.cssText).join('');
-                                                                                } catch (e) {
-                                                                                    // Catch CORS issues with external stylesheets 
-                                                                                    if (styleSheet.href) {
-                                                                                        return `<link rel="stylesheet" href="${styleSheet.href}">`;
-                                                                                    }
-                                                                                    return '';
-                                                                                }
-                                                                            })
-                                                                            .join('\n');
+                                                                            const doc = iframe.contentWindow?.document;
+                                                                            if (doc) {
+                                                                                // Get all stylesheets and styles from the parent document
+                                                                                const styles = Array.from(document.styleSheets)
+                                                                                    .map(styleSheet => {
+                                                                                        try {
+                                                                                            return Array.from(styleSheet.cssRules)
+                                                                                                .map(rule => rule.cssText).join('');
+                                                                                        } catch (e) {
+                                                                                            // Catch CORS issues with external stylesheets 
+                                                                                            if (styleSheet.href) {
+                                                                                                return `<link rel="stylesheet" href="${styleSheet.href}">`;
+                                                                                            }
+                                                                                            return '';
+                                                                                        }
+                                                                                    })
+                                                                                    .join('\n');
 
-                                                                        // Capture all inline style tags
-                                                                        const inlineStyles = Array.from(document.head.querySelectorAll('style'))
-                                                                            .map(style => style.outerHTML)
-                                                                            .join('\n');
+                                                                                // Capture all inline style tags
+                                                                                const inlineStyles = Array.from(document.head.querySelectorAll('style'))
+                                                                                    .map(style => style.outerHTML)
+                                                                                    .join('\n');
 
-                                                                        const isDark = document.documentElement.className.includes('dark');
+                                                                                const isDark = document.documentElement.className.includes('dark');
 
-                                                                        doc.open();
-                                                                        doc.write(`
+                                                                                doc.open();
+                                                                                doc.write(`
                                                                             <!DOCTYPE html>
                                                                             <html class="${isDark ? 'dark' : ''}">
                                                                             <head>
@@ -712,239 +947,328 @@ function AIChat() {
                                                                             </body>
                                                                             </html>
                                                                         `);
-                                                                        doc.close();
+                                                                                doc.close();
 
-                                                                        // Wait for resources to load then print and cleanup
-                                                                        setTimeout(() => {
-                                                                            iframe.contentWindow?.focus();
-                                                                            iframe.contentWindow?.print();
-                                                                            setTimeout(() => {
-                                                                                document.body.removeChild(iframe);
-                                                                            }, 2000);
-                                                                        }, 500);
+                                                                                // Wait for resources to load then print and cleanup
+                                                                                setTimeout(() => {
+                                                                                    iframe.contentWindow?.focus();
+                                                                                    iframe.contentWindow?.print();
+                                                                                    setTimeout(() => {
+                                                                                        document.body.removeChild(iframe);
+                                                                                    }, 2000);
+                                                                                }, 500);
+                                                                            }
+                                                                        }
+                                                                    } catch (error) {
+                                                                        console.error('Failed to generate PDF:', error);
+                                                                    } finally {
+                                                                        btn.innerHTML = originalHTML;
+                                                                        btn.disabled = false;
                                                                     }
-                                                                }
-                                                            } catch (error) {
-                                                                console.error('Failed to generate PDF:', error);
-                                                            } finally {
-                                                                btn.innerHTML = originalHTML;
-                                                                btn.disabled = false;
-                                                            }
-                                                        }}
-                                                    >
-                                                        <><Download size={12} /> PDF</>
-                                                    </button>
-                                                    <button
-                                                        className="flex items-center gap-1 px-1.5 py-1 text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 rounded transition-colors"
-                                                        title={t('chat.copy_response', '复制回复')}
-                                                        onClick={() => {
-                                                            navigator.clipboard.writeText(msg.content);
-                                                            setCopiedMessageId(msg.id);
-                                                            setTimeout(() => setCopiedMessageId(null), 2000);
-                                                        }}
-                                                    >
-                                                        {copiedMessageId === msg.id ? (
-                                                            <><Check size={12} className="text-[#07c160]" /> <span className="text-[#07c160]">已复制</span></>
-                                                        ) : (
-                                                            <><Copy size={12} /> 复制</>
-                                                        )}
-                                                    </button>
+                                                                }}
+                                                            >
+                                                                <><Download size={12} /> PDF</>
+                                                            </button>
+                                                            <button
+                                                                className="flex items-center gap-1 px-1.5 py-1 text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 rounded transition-colors"
+                                                                title={t('chat.copy_response', '复制回复')}
+                                                                onClick={() => {
+                                                                    navigator.clipboard.writeText(msg.content);
+                                                                    setCopiedMessageId(msg.id);
+                                                                    setTimeout(() => setCopiedMessageId(null), 2000);
+                                                                }}
+                                                            >
+                                                                {copiedMessageId === msg.id ? (
+                                                                    <><Check size={12} className="text-[#07c160]" /> <span className="text-[#07c160]">已复制</span></>
+                                                                ) : (
+                                                                    <><Copy size={12} /> 复制</>
+                                                                )}
+                                                            </button>
+                                                        </div>
+                                                    )}
                                                 </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                            {isSessionLoading && (
-                                <div className="flex gap-2.5">
-                                    <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 overflow-hidden shadow-sm bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5`}>
-                                        {activeSession.agentAvatarUrl ? (
-                                            <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
-                                        ) : (
-                                            <Bot size={15} className="text-[#07c160]" />
-                                        )}
-                                    </div>
-                                    <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[65%]">
-                                        {agentStatus.length > 0 ? (
-                                            <details ref={el => { if (el && !el.hasAttribute('data-init')) { el.setAttribute('data-init', '1'); el.open = true; } }} className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                                                <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300">
-                                                    {agentStatus[agentStatus.length - 1]}
-                                                    <span className="loading loading-dots loading-xs text-gray-400 ml-1" />
-                                                </summary>
-                                                <div className="mt-1 space-y-0.5 pl-3 border-l-2 border-gray-200 dark:border-gray-600">
-                                                    {agentStatus.slice(0, -1).map((s, i) => (
-                                                        <div key={i} className="opacity-60">{s}</div>
-                                                    ))}
-                                                </div>
-                                            </details>
-                                        ) : (
-                                            <span className="loading loading-dots loading-sm text-gray-400" />
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-                            <div ref={messagesEndRef} />
-                        </div>
-
-                        {/* ── Input zone ─────────────────────────────── */}
-                        <div className="bg-[#f5f5f5] dark:bg-[#232323] border-t border-black/[0.06] dark:border-white/[0.06]">
-                            {/* Toolbar row — icons above textarea, like WeChat */}
-                            <div className="flex items-center gap-0.5 px-4 pt-2 pb-0">
-                                <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors" title={t('chat.emoji', '表情')}>
-                                    <Smile size={17} />
-                                </button>
-                                {supportsImages && (
-                                    <button
-                                        className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                                        title={t('chat.upload_image', '上传图片')}
-                                        onClick={handleFileUpload}
-                                    >
-                                        <ImagePlus size={17} />
-                                    </button>
-                                )}
-                            </div>
-
-                            {/* Image preview thumbnails */}
-                            {pendingImages.length > 0 && (
-                                <div className="flex gap-2 px-4 pt-2 flex-wrap">
-                                    {pendingImages.map((img, i) => (
-                                        <div key={i} className="relative group">
-                                            <img src={img} alt="" className="w-16 h-16 object-cover rounded-lg border border-black/10 dark:border-white/10" />
-                                            <button
-                                                onClick={() => setPendingImages(prev => prev.filter((_, idx) => idx !== i))}
-                                                className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                                            >×</button>
+                                            </div>
                                         </div>
                                     ))}
+                                    {isSessionLoading && (
+                                        <div className="flex gap-2.5">
+                                            <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 overflow-hidden shadow-sm bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5`}>
+                                                {activeSession.agentAvatarUrl ? (
+                                                    <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-[85%] h-[85%] object-cover rounded-full" />
+                                                ) : (
+                                                    <Bot size={15} className="text-[#07c160]" />
+                                                )}
+                                            </div>
+                                            <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[65%]">
+                                                {agentStatus.length > 0 ? (
+                                                    <details ref={el => { if (el && !el.hasAttribute('data-init')) { el.setAttribute('data-init', '1'); el.open = true; } }} className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                                                        <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300">
+                                                            {agentStatus[agentStatus.length - 1]}
+                                                            <span className="loading loading-dots loading-xs text-gray-400 ml-1" />
+                                                        </summary>
+                                                        <div className="mt-1 space-y-0.5 pl-3 border-l-2 border-gray-200 dark:border-gray-600">
+                                                            {agentStatus.slice(0, -1).map((s, i) => (
+                                                                <div key={i} className="opacity-60">{s}</div>
+                                                            ))}
+                                                        </div>
+                                                    </details>
+                                                ) : (
+                                                    <span className="loading loading-dots loading-sm text-gray-400" />
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div ref={messagesEndRef} />
                                 </div>
-                            )}
 
-                            {/* Textarea — no border */}
-                            <textarea
-                                ref={textareaRef}
-                                className="w-full bg-transparent border-0 outline-none resize-none text-[13px] text-gray-800 dark:text-gray-200 placeholder:text-gray-400 px-5 pt-2 pb-1 min-h-[56px] max-h-[160px]"
-                                placeholder={t('chat.input_placeholder', '输入消息…')}
-                                value={input}
-                                onChange={handleInputChange}
-                                onKeyDown={handleKeyDown}
-                                onPaste={(e) => {
-                                    if (!supportsImages) return;
-                                    const items = e.clipboardData?.items;
-                                    if (!items) return;
-                                    for (const item of items) {
-                                        if (item.type.startsWith('image/')) {
-                                            e.preventDefault();
-                                            const file = item.getAsFile();
-                                            if (!file) continue;
-                                            const reader = new FileReader();
-                                            reader.onload = () => {
-                                                if (typeof reader.result === 'string') {
-                                                    setPendingImages(prev => [...prev, reader.result as string]);
-                                                }
-                                            };
-                                            reader.readAsDataURL(file);
-                                        }
-                                    }
-                                }}
-                                rows={2}
-                            />
+                                {/* ── Input zone ─────────────────────────────── */}
+                                <div className="bg-[#f5f5f5] dark:bg-[#232323] border-t border-black/[0.06] dark:border-white/[0.06] relative">
+                                    {/* Toolbar row — icons above textarea, like WeChat */}
+                                    <div className="flex items-center gap-0.5 px-4 pt-2 pb-0">
+                                        <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors" title={t('chat.emoji', '表情')}>
+                                            <Smile size={17} />
+                                        </button>
+                                        {supportsImages && (
+                                            <button
+                                                className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                                title={t('chat.upload_image', '上传图片')}
+                                                onClick={handleFileUpload}
+                                            >
+                                                <ImagePlus size={17} />
+                                            </button>
+                                        )}
+                                    </div>
 
-                            {/* Bottom bar — provider / model picker + send */}
-                            <div className="flex items-center gap-1.5 px-4 pb-3 pt-1">
-                                {/* Provider picker */}
-                                <div className="relative" ref={providerMenuRef}>
-                                    <button
-                                        className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                                        onClick={() => { setShowProviderMenu(!showProviderMenu); setShowModelMenu(false); }}
-                                    >
-                                        <ChevronUp size={12} />
-                                        <span>{currentSessionProvider?.name ?? t('chat.no_provider_selected', '无提供商')}</span>
-                                    </button>
-                                    {showProviderMenu && (
-                                        <div className="absolute bottom-full mb-1.5 left-0 min-w-[160px] bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
-                                            {aiProviders.length === 0 && <div className="px-3 py-2 text-xs text-gray-400">{t('chat.no_providers', '暂无提供商')}</div>}
-                                            {aiProviders.map((p) => (
+                                    {/* Image preview thumbnails */}
+                                    {pendingImages.length > 0 && (
+                                        <div className="flex gap-2 px-4 pt-2 flex-wrap">
+                                            {pendingImages.map((img, i) => (
+                                                <div key={i} className="relative group">
+                                                    <img src={img} alt="" className="w-16 h-16 object-cover rounded-lg border border-black/10 dark:border-white/10" />
+                                                    <button
+                                                        onClick={() => setPendingImages(prev => prev.filter((_, idx) => idx !== i))}
+                                                        className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                                                    >×</button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* @ Mention popup */}
+                                    {showMentionPopup && mentionList.length > 0 && (
+                                        <div className="absolute bottom-full mb-1 left-4 right-4 bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50 max-h-[200px] overflow-y-auto">
+                                            <div className="px-3 py-1.5 text-[10px] text-gray-400 font-medium">@ 提及成员 (↑↓选择 Enter确认)</div>
+                                            {mentionList.map((c, idx) => (
                                                 <button
-                                                    key={p.id}
-                                                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#383838] transition-colors ${currentSessionProvider?.id === p.id ? 'text-[#07c160]' : 'text-gray-600 dark:text-gray-300'}`}
-                                                    onClick={() => {
-                                                        if (activeChatId) {
-                                                            useDevOpsStore.getState().updateChatSession(activeChatId, { provider: p.id, model: p.defaultModel || '' });
-                                                        } else {
-                                                            useDevOpsStore.getState().updateAIProvider(p.id, { enabled: true });
-                                                        }
-                                                        setShowProviderMenu(false);
-                                                    }}
+                                                    key={c.id}
+                                                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${idx === mentionIndex ? 'bg-[#07c160]/10' : 'hover:bg-gray-50 dark:hover:bg-[#383838]'}`}
+                                                    onMouseDown={(e) => { e.preventDefault(); insertMention(c); }}
+                                                    onMouseEnter={() => setMentionIndex(idx)}
                                                 >
-                                                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${currentSessionProvider?.id === p.id ? 'bg-[#07c160]' : 'bg-transparent'}`} />
-                                                    {p.name}
+                                                    <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 flex items-center justify-center" style={{ background: `${c.color}22` }}>
+                                                        {c.avatar ? <img src={c.avatar} alt="" className="w-full h-full object-cover" /> : <span className="text-sm">{c.icon}</span>}
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <span className={`text-[12px] ${idx === mentionIndex ? 'text-[#07c160] font-medium' : 'text-gray-700 dark:text-gray-300'}`}>{c.name}</span>
+                                                        <span className="text-[10px] text-gray-400 ml-2">{c.role}</span>
+                                                    </div>
                                                 </button>
                                             ))}
                                         </div>
                                     )}
-                                </div>
 
-                                {/* Model picker */}
-                                {currentSessionProvider && (
-                                    <div className="relative" ref={modelMenuRef}>
-                                        <button
-                                            className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                                            onClick={() => { setShowModelMenu(!showModelMenu); setShowProviderMenu(false); }}
-                                        >
-                                            <ChevronUp size={12} />
-                                            <span className="max-w-[180px] truncate">{currentModel || t('chat.select_model', '选择模型')}</span>
-                                            {fetchingModels && <RefreshCw size={10} className="animate-spin text-gray-400" />}
-                                        </button>
-                                        {showModelMenu && (
-                                            <div className="absolute bottom-full mb-1.5 left-0 min-w-[220px] max-h-[320px] overflow-y-auto bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
-                                                {fetchingModels && displayModels.length === 0 && (
-                                                    <div className="px-3 py-3 flex items-center gap-2 text-xs text-gray-400">
-                                                        <RefreshCw size={11} className="animate-spin" />{t('chat.fetching_models', '获取模型列表中…')}
+                                    {/* Textarea — no border */}
+                                    <textarea
+                                        ref={textareaRef}
+                                        className="w-full bg-transparent border-0 outline-none resize-none text-[13px] text-gray-800 dark:text-gray-200 placeholder:text-gray-400 px-5 pt-2 pb-1 min-h-[56px] max-h-[160px]"
+                                        placeholder={activeSession?.type === 'team'
+                                            ? (isTeamRunning ? '团队协作中...' : '告诉林雨（项目经理），您想要开发点什么...')
+                                            : t('chat.input_placeholder', '输入消息…')}
+                                        value={input}
+                                        onChange={handleInputChange}
+                                        onKeyDown={handleKeyDown}
+                                        onPaste={(e) => {
+                                            if (!supportsImages) return;
+                                            const items = e.clipboardData?.items;
+                                            if (!items) return;
+                                            for (const item of items) {
+                                                if (item.type.startsWith('image/')) {
+                                                    e.preventDefault();
+                                                    const file = item.getAsFile();
+                                                    if (!file) continue;
+                                                    const reader = new FileReader();
+                                                    reader.onload = () => {
+                                                        if (typeof reader.result === 'string') {
+                                                            setPendingImages(prev => [...prev, reader.result as string]);
+                                                        }
+                                                    };
+                                                    reader.readAsDataURL(file);
+                                                }
+                                            }
+                                        }}
+                                        rows={2}
+                                    />
+
+                                    {/* Bottom bar — provider / model picker + send */}
+                                    <div className="flex items-center gap-1.5 px-4 pb-3 pt-1">
+                                        {/* Provider picker */}
+                                        <div className="relative" ref={providerMenuRef}>
+                                            <button
+                                                className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                                onClick={() => { setShowProviderMenu(!showProviderMenu); setShowModelMenu(false); }}
+                                            >
+                                                <ChevronUp size={12} />
+                                                <span>{currentSessionProvider?.name ?? t('chat.no_provider_selected', '无提供商')}</span>
+                                            </button>
+                                            {showProviderMenu && (
+                                                <div className="absolute bottom-full mb-1.5 left-0 min-w-[160px] bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
+                                                    {aiProviders.length === 0 && <div className="px-3 py-2 text-xs text-gray-400">{t('chat.no_providers', '暂无提供商')}</div>}
+                                                    {aiProviders.map((p) => (
+                                                        <button
+                                                            key={p.id}
+                                                            className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#383838] transition-colors ${currentSessionProvider?.id === p.id ? 'text-[#07c160]' : 'text-gray-600 dark:text-gray-300'}`}
+                                                            onClick={() => {
+                                                                if (activeChatId) {
+                                                                    useDevOpsStore.getState().updateChatSession(activeChatId, { provider: p.id, model: p.defaultModel || '' });
+                                                                } else {
+                                                                    useDevOpsStore.getState().updateAIProvider(p.id, { enabled: true });
+                                                                }
+                                                                setShowProviderMenu(false);
+                                                            }}
+                                                        >
+                                                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${currentSessionProvider?.id === p.id ? 'bg-[#07c160]' : 'bg-transparent'}`} />
+                                                            {p.name}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Model picker */}
+                                        {currentSessionProvider && (
+                                            <div className="relative" ref={modelMenuRef}>
+                                                <button
+                                                    className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                                    onClick={() => { setShowModelMenu(!showModelMenu); setShowProviderMenu(false); }}
+                                                >
+                                                    <ChevronUp size={12} />
+                                                    <span className="max-w-[180px] truncate">{currentModel || t('chat.select_model', '选择模型')}</span>
+                                                    {fetchingModels && <RefreshCw size={10} className="animate-spin text-gray-400" />}
+                                                </button>
+                                                {showModelMenu && (
+                                                    <div className="absolute bottom-full mb-1.5 left-0 min-w-[220px] max-h-[320px] overflow-y-auto bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50">
+                                                        {fetchingModels && displayModels.length === 0 && (
+                                                            <div className="px-3 py-3 flex items-center gap-2 text-xs text-gray-400">
+                                                                <RefreshCw size={11} className="animate-spin" />{t('chat.fetching_models', '获取模型列表中…')}
+                                                            </div>
+                                                        )}
+                                                        {!fetchingModels && displayModels.length === 0 && (
+                                                            <div className="px-3 py-2 text-xs text-gray-400">{t('chat.no_models', '无可用模型')}</div>
+                                                        )}
+                                                        {displayModels.map((m) => (
+                                                            <button
+                                                                key={m}
+                                                                className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#383838] transition-colors ${m === currentModel ? 'text-[#07c160]' : 'text-gray-600 dark:text-gray-300'}`}
+                                                                onClick={() => {
+                                                                    if (activeChatId && currentSessionProvider) useDevOpsStore.getState().updateChatSession(activeChatId, { model: m, provider: currentSessionProvider.id });
+                                                                    setShowModelMenu(false);
+                                                                }}
+                                                            >
+                                                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${m === currentModel ? 'bg-[#07c160]' : 'bg-transparent'}`} />
+                                                                {m}
+                                                            </button>
+                                                        ))}
                                                     </div>
                                                 )}
-                                                {!fetchingModels && displayModels.length === 0 && (
-                                                    <div className="px-3 py-2 text-xs text-gray-400">{t('chat.no_models', '无可用模型')}</div>
-                                                )}
-                                                {displayModels.map((m) => (
-                                                    <button
-                                                        key={m}
-                                                        className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#383838] transition-colors ${m === currentModel ? 'text-[#07c160]' : 'text-gray-600 dark:text-gray-300'}`}
-                                                        onClick={() => {
-                                                            if (activeChatId && currentSessionProvider) useDevOpsStore.getState().updateChatSession(activeChatId, { model: m, provider: currentSessionProvider.id });
-                                                            setShowModelMenu(false);
-                                                        }}
-                                                    >
-                                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${m === currentModel ? 'bg-[#07c160]' : 'bg-transparent'}`} />
-                                                        {m}
-                                                    </button>
-                                                ))}
                                             </div>
                                         )}
+
+                                        <div className="flex-1" />
+
+                                        {/* Send / Stop */}
+                                        {isSessionLoading ? (
+                                            <button
+                                                className="px-4 py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors flex items-center gap-1.5"
+                                                onClick={() => invoke('agent_cancel', { sessionId: activeChatId })}
+                                            >
+                                                <Square size={11} fill="white" />
+                                                {t('chat.stop', '停止')}
+                                            </button>
+                                        ) : (
+                                            <button
+                                                className="px-4 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] disabled:opacity-40 text-white rounded-full transition-colors"
+                                                onClick={handleSend}
+                                                disabled={!input.trim() && pendingImages.length === 0}
+                                            >
+                                                {t('chat.send', '发送')}
+                                            </button>
+                                        )}
                                     </div>
-                                )}
+                                </div>
+                            </div>  {/* end messages+input column */}
 
-                                <div className="flex-1" />
+                            {/* Group member panel — right sidebar for team sessions */}
+                            {showGroupPanel && activeSession.type === 'team' && (() => {
+                                const sessionMembers = (activeSession.members || []).map(id => contacts.find(c => c.id === id)).filter(Boolean) as VirtualContact[];
+                                return (
+                                    <div className="w-[220px] shrink-0 bg-white dark:bg-[#2a2a2a] border-l border-black/[0.06] dark:border-white/[0.06] flex flex-col overflow-y-auto">
+                                        {/* Header */}
+                                        <div className="px-4 pt-4 pb-2">
+                                            <div className="text-[13px] font-medium text-gray-800 dark:text-gray-200">群聊成员</div>
+                                            <div className="text-[11px] text-gray-400 mt-0.5">{sessionMembers.length} 人</div>
+                                        </div>
+                                        {/* Member grid */}
+                                        <div className="px-4 py-2 grid grid-cols-4 gap-3">
+                                            {sessionMembers.map(c => (
+                                                <div key={c.id} className="flex flex-col items-center gap-1 group/m relative">
+                                                    <div
+                                                        className="w-10 h-10 rounded-full overflow-hidden shadow-sm flex items-center justify-center"
+                                                        style={{ background: `linear-gradient(135deg, ${c.color}22, ${c.color}44)`, border: `1.5px solid ${c.color}33` }}
+                                                    >
+                                                        {c.avatar ? <img src={c.avatar} alt="" className="w-full h-full object-cover" /> : <span className="text-lg">{c.icon}</span>}
+                                                    </div>
+                                                    <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center">{c.name}</span>
+                                                    {/* Remove button */}
+                                                    <button
+                                                        className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center text-[10px] opacity-0 group-hover/m:opacity-100 transition-opacity"
+                                                        onClick={() => {
+                                                            const newMembers = (activeSession.members || []).filter(id => id !== c.id);
+                                                            updateChatSession(activeChatId!, { members: newMembers });
+                                                        }}
+                                                        title={`移除 ${c.name}`}
+                                                    >×</button>
+                                                </div>
+                                            ))}
+                                            {/* Add member button */}
+                                            <div className="flex flex-col items-center gap-1 relative">
+                                                <button
+                                                    className="w-10 h-10 rounded-full border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center hover:border-[#07c160] hover:text-[#07c160] text-gray-400 transition-colors"
+                                                    onClick={() => setShowContactPicker(!showContactPicker)}
+                                                >
+                                                    <Plus size={16} />
+                                                </button>
+                                                <span className="text-[10px] text-gray-400">添加</span>
+                                            </div>
+                                        </div>
 
-                                {/* Send / Stop */}
-                                {isSessionLoading ? (
-                                    <button
-                                        className="px-4 py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors flex items-center gap-1.5"
-                                        onClick={() => invoke('agent_cancel', { sessionId: activeChatId })}
-                                    >
-                                        <Square size={11} fill="white" />
-                                        {t('chat.stop', '停止')}
-                                    </button>
-                                ) : (
-                                    <button
-                                        className="px-4 py-1.5 text-xs bg-[#07c160] hover:bg-[#06ad56] disabled:opacity-40 text-white rounded-full transition-colors"
-                                        onClick={handleSend}
-                                        disabled={!input.trim() && pendingImages.length === 0}
-                                    >
-                                        {t('chat.send', '发送')}
-                                    </button>
-                                )}
-                            </div>
-                        </div>
+                                        {/* Divider + info */}
+                                        <div className="flex-1" />
+                                        <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-700/50 space-y-2">
+                                            <div className="text-[11px]">
+                                                <span className="text-gray-500">群聊名称</span>
+                                                <div className="text-gray-800 dark:text-gray-200 mt-0.5 font-medium">{activeSession.title}</div>
+                                            </div>
+                                            {activeSession.workspace && (
+                                                <div className="text-[11px]">
+                                                    <span className="text-gray-500">工作目录</span>
+                                                    <div className="text-gray-600 dark:text-gray-400 mt-0.5 truncate font-mono text-[10px]">{activeSession.workspace}</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                        </div>  {/* end flex container */}
                     </>
                 )}
             </div>
@@ -960,6 +1284,86 @@ function AIChat() {
                     }
                 }}
             />
+            {/* WeChat-style Add Member Modal */}
+            {showContactPicker && activeSession?.type === 'team' && (() => {
+                const nonMembers = (contacts || []).filter(c => !(activeSession.members || []).includes(c.id));
+                const filtered = nonMembers.filter(c => !contactPickerSearch || c.name.includes(contactPickerSearch) || c.role.includes(contactPickerSearch));
+                return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => { setShowContactPicker(false); setSelectedToAdd([]); setContactPickerSearch(''); }}>
+                        <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl w-[420px] max-h-[520px] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+                            {/* Header */}
+                            <div className="flex items-center px-5 py-4 border-b border-gray-100 dark:border-gray-700/50">
+                                <div className="flex-1 relative">
+                                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                    <input
+                                        className="w-full bg-gray-100 dark:bg-gray-800 rounded-lg pl-9 pr-3 py-2 text-[13px] text-gray-800 dark:text-gray-200 placeholder:text-gray-400 outline-none border border-transparent focus:border-[#07c160]/30 transition-colors"
+                                        placeholder="搜索"
+                                        value={contactPickerSearch}
+                                        onChange={e => setContactPickerSearch(e.target.value)}
+                                        autoFocus
+                                    />
+                                </div>
+                                <div className="ml-4 text-[14px] font-medium text-gray-700 dark:text-gray-300 shrink-0">添加群成员</div>
+                            </div>
+                            {/* Contact list */}
+                            <div className="flex-1 overflow-y-auto px-2 py-2">
+                                {filtered.length === 0 ? (
+                                    <div className="text-center py-8 text-[13px] text-gray-400">
+                                        {nonMembers.length === 0 ? '所有联系人已在群中' : '未找到匹配的联系人'}
+                                    </div>
+                                ) : (
+                                    <div className="text-[10px] text-gray-400 px-3 py-1 font-medium">联系人</div>
+                                )}
+                                {filtered.map(c => {
+                                    const isChecked = selectedToAdd.includes(c.id);
+                                    return (
+                                        <button
+                                            key={c.id}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-colors"
+                                            onClick={() => setSelectedToAdd(prev => isChecked ? prev.filter(id => id !== c.id) : [...prev, c.id])}
+                                        >
+                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors shrink-0 ${isChecked ? 'bg-[#07c160] border-[#07c160]' : 'border-gray-300 dark:border-gray-600'}`}>
+                                                {isChecked && <Check size={12} className="text-white" />}
+                                            </div>
+                                            <div className="w-9 h-9 rounded-lg overflow-hidden shrink-0 flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${c.color}22, ${c.color}44)`, border: `1.5px solid ${c.color}33` }}>
+                                                {c.avatar ? <img src={c.avatar} alt="" className="w-full h-full object-cover" /> : <span className="text-base">{c.icon}</span>}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-[13px] text-gray-800 dark:text-gray-200 truncate">{c.name}</div>
+                                                <div className="text-[11px] text-gray-400 truncate">{c.role}</div>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {/* Footer */}
+                            <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-700/50 flex justify-end gap-3">
+                                <button
+                                    onClick={() => { setShowContactPicker(false); setSelectedToAdd([]); setContactPickerSearch(''); }}
+                                    className="px-6 py-2 text-[13px] text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (activeChatId && selectedToAdd.length > 0) {
+                                            const newMembers = [...(activeSession.members || []), ...selectedToAdd];
+                                            updateChatSession(activeChatId, { members: newMembers });
+                                        }
+                                        setShowContactPicker(false);
+                                        setSelectedToAdd([]);
+                                        setContactPickerSearch('');
+                                    }}
+                                    disabled={selectedToAdd.length === 0}
+                                    className="px-6 py-2 text-[13px] bg-[#07c160] hover:bg-[#06ad56] disabled:opacity-40 text-white rounded-lg transition-colors"
+                                >
+                                    添加{selectedToAdd.length > 0 ? ` (${selectedToAdd.length})` : ''}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
         </>
     );
 }
@@ -999,8 +1403,10 @@ function ChatSessionItem({
             {...(editingSessionId === session.id ? {} : listeners)}
         >
             <div className="relative shrink-0 mr-3">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shadow-sm bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5`}>
-                    {session.agentAvatarUrl ? (
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shadow-sm ${session.type === 'team' ? 'bg-gradient-to-br from-indigo-500 to-purple-500' : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5'}`}>
+                    {session.type === 'team' ? (
+                        <Users size={17} className="text-white" />
+                    ) : session.agentAvatarUrl ? (
                         <img src={session.agentAvatarUrl} alt="Avatar" className="w-[85%] h-[85%] object-cover rounded-full" draggable={false} />
                     ) : (
                         <Bot size={17} className="text-[#07c160]" />

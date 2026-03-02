@@ -10,7 +10,7 @@ import {
     MessageSquare, Settings as SettingsIcon,
     Menu, Sparkles, Moon, Sun,
     Activity, Bot, Globe, FolderOpen, KeyRound, Palette, Blocks, Plug, Clock, Trash2, X,
-    Radio, Save, Eye, EyeOff, RefreshCw, Edit2, Users
+    Radio, Save, Eye, EyeOff, RefreshCw, Edit2, ContactRound
 } from 'lucide-react';
 
 type SettingsSection = 'appearance' | 'ai' | 'workspace' | 'environments' | 'about';
@@ -137,7 +137,7 @@ function Layout() {
 
     const navItems = [
         { path: '/', icon: MessageSquare, label: t('nav.chat', '对话'), active: location.pathname === '/' },
-        { path: '/team', icon: Users, label: t('nav.team', '团队'), active: location.pathname === '/team' },
+        { path: '/contacts', icon: ContactRound, label: t('nav.contacts', '通讯录'), active: location.pathname === '/contacts' },
         { path: '/channels', icon: Radio, label: t('nav.channels_hub', '通道'), active: location.pathname === '/channels' },
         { path: '/skills', icon: Blocks, label: t('nav.skills', '技能'), active: location.pathname === '/skills' },
         { path: '/mcp', icon: Plug, label: 'MCP', active: location.pathname === '/mcp' },
@@ -498,8 +498,8 @@ function Layout() {
                     onClick={() => setShowAvatarPicker(true)}
                     style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                 >
-                    {config?.appAvatarUrl ? (
-                        <img src={config.appAvatarUrl} alt="App Avatar" className="w-full h-full object-cover" />
+                    {config?.app_avatar_url ? (
+                        <img src={config.app_avatar_url} alt="App Avatar" className="w-full h-full object-cover" />
                     ) : (
                         <Sparkles size={16} className="text-[#07c160]" />
                     )}
@@ -620,11 +620,11 @@ function Layout() {
             <AvatarPicker
                 isOpen={showAvatarPicker}
                 onClose={() => setShowAvatarPicker(false)}
-                currentAvatarUrl={config?.appAvatarUrl}
+                currentAvatarUrl={config?.app_avatar_url}
                 title="设置应用主头像"
                 onSelect={(url) => {
                     if (config) {
-                        saveConfig({ ...config, appAvatarUrl: url });
+                        saveConfig({ ...config, app_avatar_url: url });
                     }
                 }}
             />

@@ -61,31 +61,30 @@ export interface ChatMessage {
     files?: Array<{ name: string; path: string; mime: string; size: string }>;
     toolCalls?: Array<{ name: string; args: Record<string, any>; result?: string; status?: 'pending' | 'done' | 'error' }>;
     pendingConfirm?: { toolName: string; args: Record<string, any>; description: string };
+    // Team chat fields (used when session type is 'team')
+    name?: string;       // Display name of the sender
+    icon?: string;       // Emoji icon for the sender
+    avatar?: string;     // Avatar URL for the sender
+    isProgress?: boolean; // Whether this is a progress/status message
+    action?: string;     // Progress action description
 }
 
-export interface TeamMessage {
+export interface VirtualContact {
     id: string;
-    role: string;
     name: string;
-    content?: string;
-    action?: string;
-    icon?: string;
-    avatar?: string;
-    isProgress?: boolean;
-}
-
-export interface TeamSession {
-    id: string;
-    title: string;
-    messages: TeamMessage[];
-    workspace: string;
-    createdAt: string;
-    updatedAt: string;
+    icon: string;        // Emoji icon
+    avatar: string;      // Avatar URL
+    color: string;       // Theme color
+    role: string;        // Role title, e.g. '项目经理'
+    description?: string; // Brief description
+    systemPrompt: string; // AI system prompt for this persona
 }
 
 export interface ChatSession {
     id: string;
     title: string;
+    type?: 'chat' | 'team'; // Session type: normal chat or multi-agent team
+    members?: string[];    // Contact IDs for team sessions
     messages: ChatMessage[];
     workspace?: string;  // working directory for this session
     model?: string;
@@ -183,8 +182,7 @@ interface helixState {
     aiProviders: AIProvider[];
     chatSessions: ChatSession[];
     activeChatId: string | null;
-    teamSessions: TeamSession[];
-    activeTeamSessionId: string | null;
+    contacts: VirtualContact[];
     tasks: AutoTask[];
     alerts: AlertRule[];
     logs: LogEntry[];
@@ -209,7 +207,7 @@ interface helixState {
     updateAIProvider: (id: string, updates: Partial<AIProvider>) => void;
 
     // Chat
-    createChatSession: (title?: string, workspace?: string) => string;
+    createChatSession: (title?: string, workspace?: string, type?: 'chat' | 'team') => string;
     deleteChatSession: (id: string) => void;
     setActiveChatId: (id: string | null) => void;
     updateChatSession: (id: string, updates: Partial<ChatSession>) => void;
@@ -217,14 +215,13 @@ interface helixState {
     reorderChatSessions: (oldIndex: number, newIndex: number) => void;
     sendMessage: (sessionId: string, content: string, images?: string[]) => Promise<void>;
     confirmToolExecution: (sessionId: string, messageId: string) => Promise<void>;
+    addTeamChatMessage: (sessionId: string, msg: Omit<ChatMessage, 'id' | 'timestamp'>) => string;
+    updateTeamChatMessage: (sessionId: string, msgId: string, updates: Partial<ChatMessage>) => void;
 
-    // Team Chat
-    createTeamSession: (title?: string, workspace?: string) => string;
-    deleteTeamSession: (id: string) => void;
-    setActiveTeamSessionId: (id: string | null) => void;
-    updateTeamSession: (id: string, updates: Partial<TeamSession>) => void;
-    addTeamMessage: (sessionId: string, msg: Omit<TeamMessage, 'id'>) => string;
-    updateTeamMessage: (sessionId: string, msgId: string, updates: Partial<TeamMessage>) => void;
+    // Contacts
+    addContact: (contact: Omit<VirtualContact, 'id'>) => string;
+    updateContact: (id: string, updates: Partial<VirtualContact>) => void;
+    removeContact: (id: string) => void;
 
     // Task
     addTask: (task: Omit<AutoTask, 'id'>) => void;
@@ -276,8 +273,7 @@ export const useDevOpsStore = create<helixState>()(
             aiProviders: [],
             chatSessions: [],
             activeChatId: null,
-            teamSessions: [],
-            activeTeamSessionId: null,
+            contacts: [],
             tasks: [],
             alerts: [],
             logs: [],
@@ -351,11 +347,13 @@ export const useDevOpsStore = create<helixState>()(
                 }),
 
             // ===== Chat with Function Calling =====
-            createChatSession: (title, workspace) => {
+            createChatSession: (title, workspace, type) => {
                 const id = generateId();
                 const autoWorkspace = workspace || `~/.helix/sandbox/${id}`;
                 const session: ChatSession = {
-                    id, title: title || `新对话 ${new Date().toLocaleString()}`,
+                    id, title: title || (type === 'team' ? `群聊 ${new Date().toLocaleString()}` : `新对话 ${new Date().toLocaleString()}`),
+                    type: type || 'chat',
+                    members: type === 'team' ? [] : undefined,
                     messages: [], workspace: autoWorkspace, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
                 };
                 set((s) => ({ chatSessions: [session, ...s.chatSessions], activeChatId: id }));
@@ -514,30 +512,11 @@ export const useDevOpsStore = create<helixState>()(
                 }));
             },
 
-            // ===== Team Chat =====
-            createTeamSession: (title, workspace) => {
-                const id = generateId();
-                const session: TeamSession = {
-                    id, title: title || `需求讨论 ${new Date().toLocaleString()}`,
-                    messages: [], workspace: workspace || '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-                };
-                set((s) => ({ teamSessions: [session, ...s.teamSessions], activeTeamSessionId: id }));
-                return id;
-            },
-            deleteTeamSession: (id) =>
+            // ===== Team Chat Messages (unified into chatSessions) =====
+            addTeamChatMessage: (sessionId, msg) => {
+                const newMsg: ChatMessage = { ...msg, id: generateId(), content: msg.content || '', timestamp: new Date().toISOString() };
                 set((s) => ({
-                    teamSessions: s.teamSessions.filter((cs) => cs.id !== id),
-                    activeTeamSessionId: s.activeTeamSessionId === id ? null : s.activeTeamSessionId,
-                })),
-            setActiveTeamSessionId: (id) => set({ activeTeamSessionId: id }),
-            updateTeamSession: (id, updates) =>
-                set((s) => ({
-                    teamSessions: s.teamSessions.map((cs) => (cs.id === id ? { ...cs, ...updates } : cs)),
-                })),
-            addTeamMessage: (sessionId, msg) => {
-                const newMsg: TeamMessage = { ...msg, id: generateId() };
-                set((s) => ({
-                    teamSessions: s.teamSessions.map((cs) =>
+                    chatSessions: s.chatSessions.map((cs) =>
                         cs.id === sessionId ? {
                             ...cs,
                             messages: [...cs.messages, newMsg],
@@ -547,9 +526,9 @@ export const useDevOpsStore = create<helixState>()(
                 }));
                 return newMsg.id;
             },
-            updateTeamMessage: (sessionId, msgId, updates) => {
+            updateTeamChatMessage: (sessionId, msgId, updates) => {
                 set((s) => ({
-                    teamSessions: s.teamSessions.map((cs) =>
+                    chatSessions: s.chatSessions.map((cs) =>
                         cs.id === sessionId ? {
                             ...cs,
                             messages: cs.messages.map(m => m.id === msgId ? { ...m, ...updates } : m),
@@ -666,10 +645,29 @@ export const useDevOpsStore = create<helixState>()(
                     skillStates: { ...s.skillStates, [key]: enabled },
                 }));
             },
+
+            // ===== Contacts =====
+            addContact: (contact) => {
+                const id = generateId();
+                set((s) => ({ contacts: [...s.contacts, { ...contact, id }] }));
+                return id;
+            },
+            updateContact: (id, updates) =>
+                set((s) => ({
+                    contacts: s.contacts.map((c) => (c.id === id ? { ...c, ...updates } : c)),
+                })),
+            removeContact: (id) =>
+                set((s) => ({
+                    contacts: s.contacts.filter((c) => c.id !== id),
+                    // Also remove from all team session members
+                    chatSessions: s.chatSessions.map(cs =>
+                        cs.members ? { ...cs, members: cs.members.filter(m => m !== id) } : cs
+                    ),
+                })),
         }),
         {
             name: 'devhelix-storage',
-            version: 1,
+            version: 3,
             migrate: (persistedState: any, version: number) => {
                 if (version === 0) {
                     // v0→v1: Remove pre-populated default providers that had no API key configured
@@ -680,6 +678,49 @@ export const useDevOpsStore = create<helixState>()(
                         );
                     }
                 }
+                if (version < 2) {
+                    // v1→v2: Migrate teamSessions into chatSessions with type='team'
+                    if (persistedState.teamSessions && persistedState.teamSessions.length > 0) {
+                        const migratedSessions = persistedState.teamSessions.map((ts: any) => ({
+                            ...ts,
+                            type: 'team' as const,
+                            messages: (ts.messages || []).map((m: any) => ({
+                                ...m,
+                                content: m.content || m.action || '',
+                                timestamp: m.timestamp || ts.updatedAt || new Date().toISOString(),
+                            })),
+                        }));
+                        persistedState.chatSessions = [
+                            ...(persistedState.chatSessions || []),
+                            ...migratedSessions,
+                        ];
+                    }
+                    delete persistedState.teamSessions;
+                    delete persistedState.activeTeamSessionId;
+                }
+                if (version < 3) {
+                    // v2→v3: Seed default contacts from ROLES
+                    if (!persistedState.contacts || persistedState.contacts.length === 0) {
+                        persistedState.contacts = [
+                            { id: 'c-pm', name: '林雨', icon: '📋', avatar: 'https://api.dicebear.com/9.x/micah/svg?seed=LinYu', color: '#3b82f6', role: '项目经理', description: '清华工业工程硕士，前技术专家，果断高效', systemPrompt: '' },
+                            { id: 'c-product', name: '苏明', icon: '📝', avatar: 'https://api.dicebear.com/9.x/micah/svg?seed=SuMing', color: '#8b5cf6', role: '产品经理', description: '关注用户需求，聚焦产品价值', systemPrompt: '' },
+                            { id: 'c-architect', name: '张建国', icon: '🏗️', avatar: 'https://api.dicebear.com/9.x/micah/svg?seed=ZhangJianguo', color: '#06b6d4', role: '架构师', description: '设计技术方案，严谨分析', systemPrompt: '' },
+                            { id: 'c-developer', name: '李浩', icon: '💻', avatar: 'https://api.dicebear.com/9.x/micah/svg?seed=LiHao', color: '#10b981', role: '开发工程师', description: '资深开发，行动导向', systemPrompt: '' },
+                            { id: 'c-tester', name: '王晓琪', icon: '🧪', avatar: 'https://api.dicebear.com/9.x/micah/svg?seed=WangXiaoqi', color: '#f59e0b', role: '测试工程师', description: '细致入微，验证质量', systemPrompt: '' },
+                            { id: 'c-teaching', name: '陈静', icon: '📚', avatar: 'https://api.dicebear.com/9.x/micah/svg?seed=ChenJing', color: '#0d9488', role: '教研专家', description: '课程逻辑和教学方向', systemPrompt: '' },
+                        ];
+                    }
+                    // Add members to existing team sessions
+                    const allContactIds = (persistedState.contacts || []).map((c: any) => c.id);
+                    if (persistedState.chatSessions) {
+                        persistedState.chatSessions = persistedState.chatSessions.map((cs: any) => {
+                            if (cs.type === 'team' && !cs.members) {
+                                return { ...cs, members: allContactIds };
+                            }
+                            return cs;
+                        });
+                    }
+                }
                 // Ensure loading is initialized properly after hydration
                 if (!persistedState.loading) persistedState.loading = {};
                 return persistedState;
@@ -688,12 +729,12 @@ export const useDevOpsStore = create<helixState>()(
                 servers: state.servers,
                 aiProviders: state.aiProviders,
                 chatSessions: state.chatSessions,
-                teamSessions: state.teamSessions,
                 tasks: state.tasks,
                 alerts: state.alerts,
                 config: state.config,
                 cloudConfig: state.cloudConfig,
                 botChannels: state.botChannels,
+                contacts: state.contacts,
                 skillStates: state.skillStates,
                 customSkills: state.customSkills,
             }),

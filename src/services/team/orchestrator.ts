@@ -6,8 +6,28 @@ export class TeamOrchestrator {
     private llm = new LLMProvider();
     private history: any[] = [];
 
-    async handleRequest(topic: string, workspaceDir: string, onEvent: (evt: any) => void) {
+    async handleRequest(topic: string, workspaceDir: string, onEvent: (evt: any) => void, mentionedRoles?: Array<{ role: string, name: string, systemPrompt: string }>) {
         onEvent({ type: 'team_start', data: topic });
+
+        // If specific members were @mentioned, delegate directly to them
+        if (mentionedRoles && mentionedRoles.length > 0) {
+            for (const mr of mentionedRoles) {
+                const roleId = Object.entries(ROLES).find(([_, r]) => r.name === mr.name)?.[0] || 'developer';
+                onEvent({ type: 'progress', data: { role: roleId, name: mr.name, action: `${mr.name} 正在思考...` } });
+                try {
+                    const subResult: any = await invoke('spawn_subagent', {
+                        task: topic + (workspaceDir ? `\n\nIMPORTANT: Use this directory for ALL file outputs (create it if needed): ${workspaceDir}` : ''),
+                        systemPrompt: mr.systemPrompt || `你是团队中的【${mr.name}】(${mr.role})。直接回答用户的问题。`,
+                        maxRounds: 30
+                    });
+                    onEvent({ type: 'result', data: { role: roleId, name: mr.name, content: subResult.output } });
+                } catch (err: any) {
+                    onEvent({ type: 'result', data: { role: roleId, name: mr.name, content: `执行失败: ${err.message || err}` } });
+                }
+            }
+            onEvent({ type: 'team_done' });
+            return;
+        }
 
         let rounds = 0;
         this.history.push({ role: 'user', content: topic });

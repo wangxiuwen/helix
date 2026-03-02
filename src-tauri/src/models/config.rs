@@ -67,6 +67,8 @@ pub struct AppConfig {
     pub notifications: Option<NotificationsConfig>, // Notification webhook config
     #[serde(default)]
     pub search_api_key: Option<String>, // Brave Search API key
+    #[serde(default)]
+    pub app_avatar_url: Option<String>, // User's custom app avatar (data URI or URL)
 }
 
 impl AppConfig {
@@ -85,6 +87,7 @@ impl AppConfig {
             ai_config: AiModelConfig::default(),
             notifications: None,
             search_api_key: None,
+            app_avatar_url: None,
         }
     }
 }
