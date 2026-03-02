@@ -576,7 +576,7 @@ pub async fn agent_process_message(
     let ws = workspace.clone();
     let input_clone = full_input.clone();
     let acct = account_id.to_string();
-    let response = tokio::task::spawn(async move {
+    let spawn_res = tokio::task::spawn(async move {
         SESSION_WORKSPACE
             .scope(ws, async {
                 SESSION_ACCOUNT_ID
@@ -586,10 +586,13 @@ pub async fn agent_process_message(
                     .await
             })
             .await
-    })
-    .await
-    .map_err(|e| format!("Agent panicked: {}", e))?
-    .map_err(|e| format!("Agent error: {}", e))?;
+    });
+
+    let response = tokio::time::timeout(std::time::Duration::from_secs(300), spawn_res)
+        .await
+        .map_err(|_| "Agent execution timed out after 5 minutes".to_string())?
+        .map_err(|e| format!("Agent panicked: {}", e))?
+        .map_err(|e| format!("Agent error: {}", e))?;
 
     // Extract text from AgentMessage.content
     let text = match &response.content {

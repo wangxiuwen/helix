@@ -67,13 +67,19 @@ pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, Stri
         .with_model(model)
         .with_system_prompt(&system_prompt)
         .with_tools(sdk_tools)
+        .with_max_iterations(params.max_rounds.unwrap_or(10))
         .with_checkpointer(Arc::new(InMemoryCheckpointer::new()))
         .build()
         .map_err(|e| format!("Agent build: {}", e))?;
 
     let state = Arc::new(agents_sdk::state::AgentStateSnapshot::default());
-    let response = agent.handle_message(&params.task, state).await
-        .map_err(|e| format!("Subagent error: {}", e))?;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        agent.handle_message(&params.task, state)
+    )
+    .await
+    .map_err(|_| "Subagent execution timed out after 2 minutes".to_string())?
+    .map_err(|e| format!("Subagent error: {}", e))?;
 
     let output = match &response.content {
         agents_sdk::messaging::MessageContent::Text(t) => t.clone(),

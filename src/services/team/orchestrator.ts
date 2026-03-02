@@ -6,7 +6,7 @@ export class TeamOrchestrator {
     private llm = new LLMProvider();
     private history: any[] = [];
 
-    async handleRequest(topic: string, workspaceDir: string, onEvent: (evt: any) => void, mentionedRoles?: Array<{ role: string, name: string, systemPrompt: string }>) {
+    async handleRequest(topic: string, workspaceDir: string, onEvent: (evt: any) => void, mentionedRoles?: Array<{ role: string, name: string, systemPrompt: string }>, isImplicitBroadcast?: boolean) {
         onEvent({ type: 'team_start', data: topic });
 
         // If specific members were @mentioned (or all members in group chat), each responds
@@ -16,12 +16,23 @@ export class TeamOrchestrator {
                 const roleId = Object.entries(ROLES).find(([_, r]) => r.name === mr.name)?.[0] || 'developer';
                 onEvent({ type: 'progress', data: { role: roleId, name: mr.name, action: `${mr.name} 正在思考...` } });
                 try {
-                    const subResult: any = await invoke('spawn_subagent', {
-                        task: discussionContext + (workspaceDir ? `\n\nIMPORTANT: Use this directory for ALL file outputs (create it if needed): ${workspaceDir}` : ''),
-                        systemPrompt: mr.systemPrompt || `你是团队中的【${mr.name}】(${mr.role})。根据你的专业角色直接发表你的观点和建议，简洁有力，不要客套话。如果有其他成员的发言，你可以回应他们的观点。`,
-                        maxRounds: 30
-                    });
-                    const output = subResult.output;
+                    let output = '';
+                    if (isImplicitBroadcast) {
+                        const sysPrompt = mr.systemPrompt || `你是团队中的【${mr.name}】(${mr.role})。根据你的专业角色直接发表你的观点和建议，简洁有力，不要客套话。如果有其他成员的发言，你可以回应他们的观点。`;
+                        const res = await this.llm.chat([
+                            { role: 'system', content: sysPrompt + (workspaceDir ? `\n\n相关目录: ${workspaceDir}` : '') },
+                            { role: 'user', content: discussionContext }
+                        ]);
+                        output = res.content || '';
+                    } else {
+                        const subResult: any = await invoke('spawn_subagent', {
+                            task: discussionContext + (workspaceDir ? `\n\nIMPORTANT: Use this directory for ALL file outputs (create it if needed): ${workspaceDir}` : ''),
+                            systemPrompt: mr.systemPrompt || `你是团队中的【${mr.name}】(${mr.role})。完成用户的任务。`,
+                            maxRounds: 5
+                        });
+                        output = subResult.output;
+                    }
+
                     onEvent({ type: 'result', data: { role: roleId, name: mr.name, content: output } });
                     // Accumulate context so next member sees previous responses
                     discussionContext += `\n\n[${mr.name}]: ${output}`;

@@ -386,17 +386,18 @@ function AIChat() {
 
         // Group chat: if no @mentions, ALL members should receive and respond
         let effectiveContacts = mentionedContacts;
+        let isImplicitBroadcast = false;
         if (effectiveContacts.length === 0 && freshSession?.type === 'team') {
             const sessionMembers = (freshSession.members || [])
                 .map(id => (contacts || []).find(c => c.id === id))
                 .filter(Boolean) as VirtualContact[];
             effectiveContacts = sessionMembers;
+            isImplicitBroadcast = true;
         }
 
         const mentionedRoles = effectiveContacts.map(mc => ({
             role: mc.role, name: mc.name, systemPrompt: mc.systemPrompt,
         }));
-        const mentionedArg = mentionedRoles.length > 0 ? mentionedRoles : undefined;
         await orchestrator.handleRequest(req, wsDir || '', (evt: any) => {
             const st = useDevOpsStore.getState();
             const session = st.chatSessions.find(s => s.id === targetSessionId);
@@ -451,7 +452,7 @@ function AIChat() {
                 setIsTeamRunning(false);
                 pendingProgressId = null;
             }
-        }, mentionedArg);
+        }, mentionedRoles.length > 0 ? mentionedRoles : undefined, isImplicitBroadcast);
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
