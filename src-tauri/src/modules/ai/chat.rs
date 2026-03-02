@@ -219,7 +219,11 @@ pub async fn process_wechat_message(content: &str) -> Result<String, String> {
     let messages = vec![
         AiMessage {
             role: "system".to_string(),
-            content: ai.system_prompt.clone(),
+            content: format!(
+                "{}\n\n{}",
+                ai.system_prompt,
+                crate::modules::ai::context::get_antigravity_context(None)
+            ),
         },
         AiMessage {
             role: "user".to_string(),
@@ -244,7 +248,11 @@ pub async fn ai_chat_send(content: String) -> Result<Value, String> {
     let messages = vec![
         AiMessage {
             role: "system".to_string(),
-            content: ai.system_prompt.clone(),
+            content: format!(
+                "{}\n\n{}",
+                ai.system_prompt,
+                crate::modules::ai::context::get_antigravity_context(None)
+            ),
         },
         AiMessage {
             role: "user".to_string(),

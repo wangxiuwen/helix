@@ -3,14 +3,13 @@
 //! Uses ConfigurableAgentBuilder for the agent loop with custom tools.
 
 use agents_sdk::{
-    ConfigurableAgentBuilder, OpenAiConfig, OpenAiChatModel,
-    state::AgentStateSnapshot,
-    persistence::InMemoryCheckpointer,
+    persistence::InMemoryCheckpointer, state::AgentStateSnapshot, ConfigurableAgentBuilder,
+    OpenAiChatModel, OpenAiConfig,
 };
 
 use serde_json::{json, Value};
-use tracing::info;
 use std::sync::Arc;
+use tracing::info;
 
 use crate::modules::config::load_app_config;
 use crate::modules::database;
@@ -37,7 +36,9 @@ pub fn agent_cancel(session_id: Option<String>) {
             map.insert(sid, true);
         } else {
             // Cancel all sessions
-            for v in map.values_mut() { *v = true; }
+            for v in map.values_mut() {
+                *v = true;
+            }
         }
     }
     emit_agent_progress("cancelled", json!({}));
@@ -46,7 +47,9 @@ pub fn agent_cancel(session_id: Option<String>) {
 
 /// Check if a session is cancelled
 fn is_session_cancelled(account_id: &str) -> bool {
-    CANCELLED_SESSIONS.lock().ok()
+    CANCELLED_SESSIONS
+        .lock()
+        .ok()
         .and_then(|m| m.get(account_id).copied())
         .unwrap_or(false)
 }
@@ -85,7 +88,9 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string();
+    let now = chrono::Local::now()
+        .format("%Y-%m-%d %H:%M:%S %Z")
+        .to_string();
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
     let model_info = match load_app_config() {
@@ -127,7 +132,22 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
         ));
     }
 
-    sections.push(
+    let mut memory_section = String::from(
+        "### Memory\n\
+         - `memory_store` — Save important information for future reference\n\
+         - `memory_recall` — Recall previously stored information by keyword\n\n",
+    );
+
+    let antigravity_context =
+        crate::modules::ai::context::get_antigravity_context(workspace.map(|w| w.to_string()));
+    if !antigravity_context.is_empty() {
+        memory_section.push_str(&format!(
+            "### Persistent Context (Antigravity Memory)\n\n{}\n",
+            antigravity_context
+        ));
+    }
+
+    sections.push(format!(
         "## Tool Use\n\
          You have access to the following tools. USE THEM proactively — don't just describe what to do.\n\n\
          ### Filesystem\n\
@@ -137,9 +157,7 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
          ### Web & Search\n\
          - `web_fetch` — Download web content, call APIs\n\
          - `web_search` — Search the web\n\n\
-         ### Memory\n\
-         - `memory_store` — Save important information for future reference\n\
-         - `memory_recall` — Recall previously stored information by keyword\n\n\
+         {}\
          ### Process Management\n\
          - `process_list` — List running processes\n\
          - `process_kill` — Terminate processes\n\
@@ -150,9 +168,10 @@ fn build_system_prompt(custom_prompt: &str, workspace: Option<&str>) -> String {
          - `get_current_time` — Get the current system time with timezone\n\
          - `desktop_screenshot` — Capture a screenshot of the desktop\n\n\
          ### Browser Automation\n\
-         - `browser_use` — Control a browser: launch, goto(url), click(ref_id), fill(ref_id, text), snapshot, screenshot, stop"
-            .to_string(),
-    );
+         - `browser_use` — Control a browser: launch, goto(url), click(ref_id), fill(ref_id, text), snapshot, screenshot, stop\n\n\
+         {}",
+        memory_section, mcp_prompt
+    ));
 
     sections.push(
         "## Memory\n\
@@ -275,7 +294,11 @@ fn load_prompt_file(name: &str) -> Option<String> {
             // Strip YAML frontmatter if present
             let content = if content.starts_with("---") {
                 let parts: Vec<&str> = content.splitn(3, "---").collect();
-                if parts.len() >= 3 { parts[2].trim().to_string() } else { content }
+                if parts.len() >= 3 {
+                    parts[2].trim().to_string()
+                } else {
+                    content
+                }
             } else {
                 content
             };
@@ -471,12 +494,15 @@ pub async fn agent_process_message(
         ai.base_url.clone()
     };
     let full_api_url = format!("{}/chat/completions", effective_base.trim_end_matches('/'));
-    
-    let api_key = if ai.api_key.is_empty() { "dummy" } else { &ai.api_key };
-    let oai_config = OpenAiConfig::new(api_key, &ai.model)
-        .with_api_url(Some(full_api_url));
+
+    let api_key = if ai.api_key.is_empty() {
+        "dummy"
+    } else {
+        &ai.api_key
+    };
+    let oai_config = OpenAiConfig::new(api_key, &ai.model).with_api_url(Some(full_api_url));
     let model = Arc::new(
-        OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init failed: {}", e))?
+        OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init failed: {}", e))?,
     );
 
     // 4. Build system prompt
@@ -516,10 +542,21 @@ pub async fn agent_process_message(
 
         // Add recent history
         if history.len() > 1 {
-            let context: Vec<String> = history.iter()
+            let context: Vec<String> = history
+                .iter()
                 .rev()
                 .take(history.len().saturating_sub(1))
-                .map(|h| format!("**{}**: {}", if h.role == "user" { "User" } else { "Assistant" }, h.content))
+                .map(|h| {
+                    format!(
+                        "**{}**: {}",
+                        if h.role == "user" {
+                            "User"
+                        } else {
+                            "Assistant"
+                        },
+                        h.content
+                    )
+                })
                 .collect();
             parts.push(format!("## Recent History\n{}", context.join("\n\n")));
         }
@@ -538,14 +575,19 @@ pub async fn agent_process_message(
     let input_clone = full_input.clone();
     let acct = account_id.to_string();
     let response = tokio::task::spawn(async move {
-        SESSION_WORKSPACE.scope(ws, async {
-            SESSION_ACCOUNT_ID.scope(acct, async {
-                agent.handle_message(&input_clone, state).await
-            }).await
-        }).await
-    }).await
-        .map_err(|e| format!("Agent panicked: {}", e))?
-        .map_err(|e| format!("Agent error: {}", e))?;
+        SESSION_WORKSPACE
+            .scope(ws, async {
+                SESSION_ACCOUNT_ID
+                    .scope(acct, async {
+                        agent.handle_message(&input_clone, state).await
+                    })
+                    .await
+            })
+            .await
+    })
+    .await
+    .map_err(|e| format!("Agent panicked: {}", e))?
+    .map_err(|e| format!("Agent error: {}", e))?;
 
     // Extract text from AgentMessage.content
     let text = match &response.content {
@@ -559,7 +601,7 @@ pub async fn agent_process_message(
     let acct_for_compact = account_id.to_string();
     tokio::spawn(async move {
         match super::memory::compact_conversation_history(&acct_for_compact).await {
-            Ok(0) => {}, // No compaction needed
+            Ok(0) => {} // No compaction needed
             Ok(n) => info!("[agent] Background compaction: {} messages compacted", n),
             Err(e) => tracing::warn!("[agent] Background compaction failed: {}", e),
         }
@@ -568,7 +610,6 @@ pub async fn agent_process_message(
     emit_agent_progress("done", json!({ "chars": clean.len() }));
     Ok(clean)
 }
-
 
 /// Process a message with images — describes images first, then delegates to main agent.
 pub async fn agent_process_message_with_images(
@@ -582,8 +623,13 @@ pub async fn agent_process_message_with_images(
     for img_url in images {
         let desc = super::tools::tool_image_describe(
             img_url.clone(),
-            Some(format!("请描述这张图片的内容，用户的问题是: {}", user_input)),
-        ).await.unwrap_or_else(|e| format!("[图片无法识别: {}]", e));
+            Some(format!(
+                "请描述这张图片的内容，用户的问题是: {}",
+                user_input
+            )),
+        )
+        .await
+        .unwrap_or_else(|e| format!("[图片无法识别: {}]", e));
         descriptions.push(desc);
     }
 
@@ -595,7 +641,9 @@ pub async fn agent_process_message_with_images(
             "{}\n\n[附带 {} 张图片的描述]:\n{}",
             user_input,
             descriptions.len(),
-            descriptions.iter().enumerate()
+            descriptions
+                .iter()
+                .enumerate()
                 .map(|(i, d)| format!("图片{}: {}", i + 1, d))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -617,7 +665,12 @@ fn clean_response(text: &str) -> String {
 
 /// Process a message through the full agent (with tools)
 #[tauri::command]
-pub async fn agent_chat(account_id: String, content: String, images: Option<Vec<String>>, workspace: Option<String>) -> Result<Value, String> {
+pub async fn agent_chat(
+    account_id: String,
+    content: String,
+    images: Option<Vec<String>>,
+    workspace: Option<String>,
+) -> Result<Value, String> {
     let imgs = images.unwrap_or_default();
     let reply = if imgs.is_empty() {
         agent_process_message(&account_id, &content, workspace).await?

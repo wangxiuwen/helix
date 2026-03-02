@@ -430,6 +430,8 @@ pub fn run() {
             modules::mcp::mcp_toggle,
             modules::mcp::mcp_delete,
             modules::mcp::mcp_update,
+            // AI Context
+            modules::ai::context::get_antigravity_context,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

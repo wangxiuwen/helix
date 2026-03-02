@@ -12,9 +12,18 @@ export class TeamOrchestrator {
         let rounds = 0;
         this.history.push({ role: 'user', content: topic });
 
-        const workspaceContext = workspaceDir
+        let workspaceContext = workspaceDir
             ? `\n\n# Workspace Directory\nALL files MUST be written EXACTLY to this directory (create it if not exists): ${workspaceDir}`
             : '';
+
+        try {
+            const agContext = await invoke<string>('get_antigravity_context', { workspace: workspaceDir || null });
+            if (agContext) {
+                workspaceContext += `\n\n# Persistent Context\n${agContext}`;
+            }
+        } catch (e) {
+            console.error('Failed to load antigravity context', e);
+        }
 
         while (rounds < 30) {
             rounds++;

@@ -1,8 +1,9 @@
 pub mod chat;
-pub mod providers;
-pub mod streaming;
-pub mod model_selection;
-pub mod stream_events;
-pub mod usage;
+pub mod context;
 pub mod link_understanding;
 pub mod media_understanding;
+pub mod model_selection;
+pub mod providers;
+pub mod stream_events;
+pub mod streaming;
+pub mod usage;
