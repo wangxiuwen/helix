@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { arrayMove } from '@dnd-kit/sortable';
 import { executeTool, setSkillEnabled, addCustomSkill as addSkillToRegistry, removeCustomSkill as removeSkillFromRegistry, syncSkillStates, loadCustomSkills, loadAllAgentSkills, type OpsSkill, type ToolParameter, type AgentSkill } from '../services/opsTools';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -191,6 +192,7 @@ interface helixState {
     setActiveChatId: (id: string | null) => void;
     updateChatSession: (id: string, updates: Partial<ChatSession>) => void;
     togglePinChatSession: (id: string) => void;
+    reorderChatSessions: (oldIndex: number, newIndex: number) => void;
     sendMessage: (sessionId: string, content: string, images?: string[]) => Promise<void>;
     confirmToolExecution: (sessionId: string, messageId: string) => Promise<void>;
 
@@ -342,6 +344,10 @@ export const useDevOpsStore = create<helixState>()(
             togglePinChatSession: (id) =>
                 set((s) => ({
                     chatSessions: s.chatSessions.map(cs => cs.id === id ? { ...cs, pinned: !cs.pinned } : cs)
+                })),
+            reorderChatSessions: (oldIndex, newIndex) =>
+                set((s) => ({
+                    chatSessions: arrayMove(s.chatSessions, oldIndex, newIndex)
                 })),
 
             sendMessage: async (sessionId, content, images) => {
