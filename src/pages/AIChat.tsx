@@ -718,7 +718,7 @@ function AIChat() {
 
                         <div className="flex flex-1 overflow-hidden">
                             {/* Left: messages + input column */}
-                            <div className="flex-1 flex flex-col overflow-hidden">
+                            <div className="flex-1 flex flex-col overflow-hidden" onClick={() => { if (showGroupPanel) { setShowGroupPanel(false); setShowContactPicker(false); } }}>
                                 {/* messages */}
                                 <div className="flex-1 overflow-y-auto px-4 py-5 space-y-4">
                                     {activeSession.messages.length === 0 && (
