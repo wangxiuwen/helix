@@ -11,7 +11,7 @@ const DEFAULT_PRESETS = Array.from({ length: 11 }).map((_, i) => ({
 }));
 
 export const BUILT_IN_AVATARS = [
-    { id: 'helix-default', title: 'Helix', url: '/helix-logo.png' },
+    { id: 'helix-default', title: 'Helix', url: '/vite.svg' },
     ...DEFAULT_PRESETS
 ];
 
