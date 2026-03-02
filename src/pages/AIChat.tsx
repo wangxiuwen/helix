@@ -383,7 +383,17 @@ function AIChat() {
                 });
             }
         }
-        const mentionedRoles = mentionedContacts.map(mc => ({
+
+        // Group chat: if no @mentions, ALL members should receive and respond
+        let effectiveContacts = mentionedContacts;
+        if (effectiveContacts.length === 0 && freshSession?.type === 'team') {
+            const sessionMembers = (freshSession.members || [])
+                .map(id => (contacts || []).find(c => c.id === id))
+                .filter(Boolean) as VirtualContact[];
+            effectiveContacts = sessionMembers;
+        }
+
+        const mentionedRoles = effectiveContacts.map(mc => ({
             role: mc.role, name: mc.name, systemPrompt: mc.systemPrompt,
         }));
         const mentionedArg = mentionedRoles.length > 0 ? mentionedRoles : undefined;
