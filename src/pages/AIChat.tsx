@@ -5,24 +5,43 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.min.css';
 import {
+    DndContext,
+    closestCenter,
+    KeyboardSensor,
+    PointerSensor,
+    useSensor,
+    useSensors,
+    type DragEndEvent
+} from '@dnd-kit/core';
+import {
+    SortableContext,
+    sortableKeyboardCoordinates,
+    verticalListSortingStrategy,
+    useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
     Bot,
     Check,
+    ChevronDown,
     ChevronRight,
     ChevronUp,
+    Copy,
     FolderOpen,
     ImagePlus,
+    MessageSquareMore,
+    MoreHorizontal,
     Plus,
     Pin,
     RefreshCw,
     Search,
     Smile,
     Sparkles,
-    Trash2,
     Square,
     User,
     Wrench,
     X,
-    Edit2,
+    Download
 } from 'lucide-react';
 import { useDevOpsStore, AIProvider } from '../stores/useDevOpsStore';
 import { useConfigStore } from '../stores/useConfigStore';
@@ -136,6 +155,29 @@ function AIChat() {
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
     const [editingSessionTitle, setEditingSessionTitle] = useState('');
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, sessionId: string } | null>(null);
+    const contextMenuRef = useRef<HTMLDivElement>(null);
+    const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+
+    // Setup DnD sensors
+    const sensors = useSensors(
+        useSensor(PointerSensor, {
+            activationConstraint: {
+                distance: 5, // minimum drag distance before taking effect, protects click events
+            },
+        }),
+        useSensor(KeyboardSensor, {
+            coordinateGetter: sortableKeyboardCoordinates,
+        })
+    );
+
+    const handleDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (over && active.id !== over.id) {
+            const oldIndex = chatSessions.findIndex((s) => s.id === active.id);
+            const newIndex = chatSessions.findIndex((s) => s.id === over.id);
+            useDevOpsStore.getState().reorderChatSessions(oldIndex, newIndex);
+        }
+    };
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -173,7 +215,8 @@ function AIChat() {
         const handler = (e: MouseEvent) => {
             if (providerMenuRef.current && !providerMenuRef.current.contains(e.target as Node)) setShowProviderMenu(false);
             if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) setShowModelMenu(false);
-            setContextMenu(null);
+            if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) setContextMenu(null);
+            else if (!contextMenuRef.current) setContextMenu(null);
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
@@ -256,7 +299,7 @@ function AIChat() {
         .sort((a, b) => {
             if (a.pinned && !b.pinned) return -1;
             if (!a.pinned && b.pinned) return 1;
-            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+            return 0;
         });
 
     const getLastMessage = (session: typeof chatSessions[0]) => {
@@ -310,89 +353,36 @@ function AIChat() {
                     {filteredSessions.length === 0 ? (
                         <div className="px-4 py-12 text-center text-gray-400 text-xs">{t('chat.no_sessions', '暂无对话')}</div>
                     ) : (
-                        filteredSessions.map((session) => {
-                            const isWorking = loading[`chat-${session.id}`];
-                            return (
-                                <div
-                                    key={session.id}
-                                    className={`flex items-center px-3 py-2.5 cursor-pointer transition-colors group ${activeChatId === session.id || contextMenu?.sessionId === session.id
-                                        ? 'bg-black/[0.08] dark:bg-white/[0.08]'
-                                        : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.04]'
-                                        }`}
-                                    onClick={() => setActiveChatId(session.id)}
-                                    onContextMenu={(e) => handleContextMenu(e, session.id)}
-                                >
-                                    <div className="relative shrink-0 mr-3">
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shadow-sm bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5`}>
-                                            {session.agentAvatarUrl ? (
-                                                <img src={session.agentAvatarUrl} alt="Avatar" className="w-[85%] h-[85%] object-cover rounded-full" />
-                                            ) : (
-                                                <Bot size={17} className="text-[#07c160]" />
-                                            )}
-                                        </div>
-                                        {session.pinned && (
-                                            <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-white dark:bg-[#252525] rounded-full flex items-center justify-center shrink-0 z-10">
-                                                <Pin size={9} className="text-[#07c160] rotate-45" fill="currentColor" />
-                                            </div>
-                                        )}
-                                        {/* Working Indicator */}
-                                        {isWorking && (
-                                            <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-white dark:bg-[#252525] rounded-full flex items-center justify-center shrink-0 z-10">
-                                                <div className="w-2.5 h-2.5 bg-[#07c160] rounded-full animate-pulse" />
-                                            </div>
-                                        )}
-                                        {/* Unread Badge */}
-                                        {activeChatId !== session.id && (session.unreadCount || 0) > 0 && !isWorking && (
-                                            <div className="absolute -top-1.5 -left-1.5 w-[18px] h-[18px] bg-red-500 rounded-full text-[9px] font-bold text-white flex items-center justify-center border-2 border-[#f5f5f5] dark:border-[#252525] shrink-0 z-10">
-                                                {session.unreadCount! > 99 ? '99+' : session.unreadCount}
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center justify-between min-w-0">
-                                            {editingSessionId === session.id ? (
-                                                <input
-                                                    autoFocus
-                                                    className="w-full text-[13px] font-medium text-gray-800 dark:text-gray-200 bg-transparent border-b border-[#07c160] outline-none"
-                                                    value={editingSessionTitle}
-                                                    onChange={(e) => setEditingSessionTitle(e.target.value)}
-                                                    onKeyDown={(e) => {
-                                                        if (e.key === 'Enter') {
-                                                            if (editingSessionTitle.trim()) updateChatSession(session.id, { title: editingSessionTitle.trim() });
-                                                            setEditingSessionId(null);
-                                                        } else if (e.key === 'Escape') {
-                                                            setEditingSessionId(null);
-                                                        }
-                                                    }}
-                                                    onBlur={() => {
-                                                        if (editingSessionTitle.trim()) updateChatSession(session.id, { title: editingSessionTitle.trim() });
-                                                        setEditingSessionId(null);
-                                                    }}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                />
-                                            ) : (
-                                                <div className="flex items-center gap-1.5 min-w-0" onDoubleClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setEditingSessionId(session.id);
-                                                    setEditingSessionTitle(session.title);
-                                                }}>
-                                                    <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate group-hover:text-gray-900 dark:group-hover:text-white transition-colors">{session.title}</span>
-                                                </div>
-                                            )}
-                                            <span className="text-[10px] text-gray-400 shrink-0 ml-2">{getLastTime(session)}</span>
-                                        </div>
-                                        <div className="flex items-center justify-between mt-0.5">
-                                            <p className="text-xs text-gray-400 truncate">
-                                                {session.workspace
-                                                    ? <span className="flex items-center gap-1"><FolderOpen size={10} />{session.workspace.split('/').pop()}</span>
-                                                    : (getLastMessage(session) || <span className="italic opacity-50">{t('chat.new_chat', '新对话')}</span>)
-                                                }
-                                            </p>
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })
+                        <DndContext
+                            sensors={sensors}
+                            collisionDetection={closestCenter}
+                            onDragEnd={handleDragEnd}
+                        >
+                            <SortableContext
+                                items={filteredSessions.map(s => s.id)}
+                                strategy={verticalListSortingStrategy}
+                            >
+                                {filteredSessions.map((session) => (
+                                    <ChatSessionItem
+                                        key={session.id}
+                                        session={session}
+                                        activeChatId={activeChatId}
+                                        contextMenu={contextMenu}
+                                        editingSessionId={editingSessionId}
+                                        editingSessionTitle={editingSessionTitle}
+                                        setActiveChatId={setActiveChatId}
+                                        handleContextMenu={handleContextMenu}
+                                        setEditingSessionId={setEditingSessionId}
+                                        setEditingSessionTitle={setEditingSessionTitle}
+                                        updateChatSession={updateChatSession}
+                                        getLastTime={getLastTime}
+                                        getLastMessage={getLastMessage}
+                                        t={t}
+                                        loading={loading}
+                                    />
+                                ))}
+                            </SortableContext>
+                        </DndContext>
                     )}
                 </div>
             </div>
@@ -400,22 +390,22 @@ function AIChat() {
             {/* Context Menu overlay */}
             {contextMenu && (
                 <div
-                    className="fixed z-[100] w-40 bg-white/90 dark:bg-[#333333]/90 backdrop-blur-xl rounded-xl shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-1.5 overflow-hidden"
+                    ref={contextMenuRef}
+                    className="fixed z-[100] min-w-[124px] bg-white dark:bg-[#2b2b2b] rounded-lg shadow-[0_5px_15px_rgba(0,0,0,0.1)] dark:shadow-[0_5px_15px_rgba(0,0,0,0.3)] ring-1 ring-black/5 dark:ring-white/5 py-1.5 px-1.5 overflow-hidden flex flex-col gap-0.5"
                     style={{ left: contextMenu.x, top: contextMenu.y }}
                     onContextMenu={(e) => e.preventDefault()}
                 >
                     <button
-                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-[#07c160] hover:text-white flex items-center justify-between transition-colors group"
+                        className="w-full text-left px-3 py-2 rounded-md text-[13px] text-gray-800 dark:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                         onClick={() => {
                             togglePinChatSession(contextMenu.sessionId);
                             setContextMenu(null);
                         }}
                     >
-                        <span>{chatSessions.find(s => s.id === contextMenu.sessionId)?.pinned ? t('chat.unpin', '取消置顶') : t('chat.pin', '置顶')}</span>
-                        <Pin size={13} className={chatSessions.find(s => s.id === contextMenu.sessionId)?.pinned ? "rotate-45" : ""} fill="currentColor" />
+                        {chatSessions.find(s => s.id === contextMenu.sessionId)?.pinned ? t('chat.unpin', '取消置顶') : t('chat.pin', '置顶')}
                     </button>
                     <button
-                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-[#07c160] hover:text-white flex items-center justify-between transition-colors mt-0.5 group"
+                        className="w-full text-left px-3 py-2 rounded-md text-[13px] text-gray-800 dark:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                         onClick={() => {
                             const session = chatSessions.find(s => s.id === contextMenu.sessionId);
                             if (session) {
@@ -425,12 +415,11 @@ function AIChat() {
                             setContextMenu(null);
                         }}
                     >
-                        <span>{t('chat.rename', '重命名')}</span>
-                        <Edit2 size={13} />
+                        {t('chat.rename', '重命名')}
                     </button>
-                    <div className="w-full h-px bg-black/5 dark:bg-white/10 my-1" />
+                    <div className="mx-3 my-0.5 h-px bg-black/5 dark:bg-white/5 shrink-0" />
                     <button
-                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-500 hover:bg-red-500 hover:text-white flex items-center justify-between transition-colors group"
+                        className="w-full text-left px-3 py-2 rounded-md text-[13px] text-[#ff4d4f] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                         onClick={() => {
                             if (window.confirm(t('chat.confirm_delete', '确定要删除此对话吗？'))) {
                                 deleteChatSession(contextMenu.sessionId);
@@ -438,8 +427,7 @@ function AIChat() {
                             setContextMenu(null);
                         }}
                     >
-                        <span>{t('chat.delete', '删除')}</span>
-                        <Trash2 size={13} />
+                        {t('chat.delete', '删除')}
                     </button>
                 </div>
             )}
@@ -502,6 +490,18 @@ function AIChat() {
                                     <FolderOpen size={11} />{activeSession.workspace}
                                 </span>
                             )}
+                            <div className="flex-1" />
+                            <div className="flex items-center gap-2.5 mr-3" style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as React.CSSProperties}>
+                                <button className="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-gray-700 dark:text-gray-300">
+                                    <MessageSquareMore size={22} strokeWidth={1.5} />
+                                </button>
+                                <button className="px-2 py-1.5 rounded-md bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 transition-colors text-gray-800 dark:text-gray-200">
+                                    <ChevronDown size={16} strokeWidth={2.5} />
+                                </button>
+                                <button className="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-gray-800 dark:text-gray-200">
+                                    <MoreHorizontal size={22} strokeWidth={2} />
+                                </button>
+                            </div>
                         </div>
 
                         {/* messages */}
@@ -513,7 +513,7 @@ function AIChat() {
                                 </div>
                             )}
                             {activeSession.messages.map((msg) => (
-                                <div key={msg.id} className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                                <div key={msg.id} className={`flex gap-2.5 group/msg ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                                     <div
                                         className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center mt-0.5 overflow-hidden shadow-sm ${msg.role === 'user'
                                             ? config?.appAvatarUrl ? 'bg-white dark:bg-[#404040]' : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5'
@@ -538,7 +538,7 @@ function AIChat() {
                                             ? 'bg-[#95ec69] dark:bg-[#3eb575] text-gray-900 dark:text-white rounded-tr-sm'
                                             : 'bg-white dark:bg-[#2c2c2c] text-gray-800 dark:text-gray-200 rounded-tl-sm shadow-sm'
                                             }`}>
-                                            <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-100 [&_pre]:dark:bg-gray-800 [&_pre]:rounded-lg [&_pre]:p-2.5 [&_pre]:overflow-x-auto [&_pre]:text-xs [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm">
+                                            <div id={`msg-content-${msg.id}`} className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-100 [&_pre]:dark:bg-gray-800 [&_pre]:rounded-lg [&_pre]:p-2.5 [&_pre]:overflow-x-auto [&_pre]:text-xs [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm">
                                                 {msg.images && msg.images.length > 0 && (
                                                     <div className="flex gap-1.5 flex-wrap mb-2 not-prose">
                                                         {msg.images.map((img, i) => (
@@ -635,9 +635,120 @@ function AIChat() {
                                                             >
                                                                 {t('chat.save_as', '⬇ 另存为')}
                                                             </button>
-
                                                         </div>
                                                     ))}
+                                                </div>
+                                            )}
+                                            {/* Beautiful copy and PDF buttons integrated inside bottom right corner of agent message */}
+                                            {msg.role !== 'user' && (
+                                                <div className="flex justify-end mt-1.5 -mb-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity gap-1">
+                                                    <button
+                                                        className="flex items-center gap-1 px-1.5 py-1 text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 rounded transition-colors"
+                                                        title={t('chat.export_pdf', '导出 PDF')}
+                                                        onClick={async (e) => {
+                                                            const btn = e.currentTarget;
+                                                            const originalHTML = btn.innerHTML;
+                                                            btn.innerHTML = `<span class="loading loading-spinner w-3 h-3 text-gray-400" align="center"></span><span style="margin-left:4px">导出中</span>`;
+                                                            btn.disabled = true;
+                                                            try {
+                                                                const sourceElement = document.getElementById(`msg-content-${msg.id}`);
+                                                                if (sourceElement) {
+                                                                    // Create a hidden iframe for printing
+                                                                    const iframe = document.createElement('iframe');
+                                                                    iframe.style.position = 'absolute';
+                                                                    iframe.style.width = '0px';
+                                                                    iframe.style.height = '0px';
+                                                                    iframe.style.border = 'none';
+                                                                    document.body.appendChild(iframe);
+
+                                                                    const doc = iframe.contentWindow?.document;
+                                                                    if (doc) {
+                                                                        // Get all stylesheets and styles from the parent document
+                                                                        const styles = Array.from(document.styleSheets)
+                                                                            .map(styleSheet => {
+                                                                                try {
+                                                                                    return Array.from(styleSheet.cssRules)
+                                                                                        .map(rule => rule.cssText).join('');
+                                                                                } catch (e) {
+                                                                                    // Catch CORS issues with external stylesheets 
+                                                                                    if (styleSheet.href) {
+                                                                                        return `<link rel="stylesheet" href="${styleSheet.href}">`;
+                                                                                    }
+                                                                                    return '';
+                                                                                }
+                                                                            })
+                                                                            .join('\n');
+
+                                                                        // Capture all inline style tags
+                                                                        const inlineStyles = Array.from(document.head.querySelectorAll('style'))
+                                                                            .map(style => style.outerHTML)
+                                                                            .join('\n');
+
+                                                                        const isDark = document.documentElement.className.includes('dark');
+
+                                                                        doc.open();
+                                                                        doc.write(`
+                                                                            <!DOCTYPE html>
+                                                                            <html class="${isDark ? 'dark' : ''}">
+                                                                            <head>
+                                                                                <title>Chat Message Export - ${msg.id.substring(0, 6)}</title>
+                                                                                <style>${styles}</style>
+                                                                                ${inlineStyles}
+                                                                                <style>
+                                                                                    body { 
+                                                                                        padding: 20px !important; 
+                                                                                        margin: 0 !important; 
+                                                                                        background: ${isDark ? '#1f2937' : '#ffffff'} !important;
+                                                                                        color: ${isDark ? '#f3f4f6' : '#1f2937'} !important;
+                                                                                    }
+                                                                                    @media print {
+                                                                                        @page { margin: 10mm; }
+                                                                                        body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                                                                                    }
+                                                                                </style>
+                                                                            </head>
+                                                                            <body>
+                                                                                ${sourceElement.outerHTML}
+                                                                            </body>
+                                                                            </html>
+                                                                        `);
+                                                                        doc.close();
+
+                                                                        // Wait for resources to load then print and cleanup
+                                                                        setTimeout(() => {
+                                                                            iframe.contentWindow?.focus();
+                                                                            iframe.contentWindow?.print();
+                                                                            setTimeout(() => {
+                                                                                document.body.removeChild(iframe);
+                                                                            }, 2000);
+                                                                        }, 500);
+                                                                    }
+                                                                }
+                                                            } catch (error) {
+                                                                console.error('Failed to generate PDF:', error);
+                                                            } finally {
+                                                                btn.innerHTML = originalHTML;
+                                                                btn.disabled = false;
+                                                            }
+                                                        }}
+                                                    >
+                                                        <><Download size={12} /> PDF</>
+                                                    </button>
+                                                    <button
+                                                        className="flex items-center gap-1 px-1.5 py-1 text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 rounded transition-colors"
+                                                        title={t('chat.copy_response', '复制回复')}
+                                                        onClick={() => {
+                                                            navigator.clipboard.writeText(msg.content);
+                                                            setCopiedMessageId(msg.id);
+                                                            setTimeout(() => setCopiedMessageId(null), 2000);
+                                                        }}
+                                                    >
+                                                        {copiedMessageId === msg.id ? (
+                                                            <><Check size={12} className="text-[#07c160]" /> <span className="text-[#07c160]">已复制</span></>
+                                                        ) : (
+                                                            <><Copy size={12} /> 复制</>
+                                                        )}
+                                                    </button>
                                                 </div>
                                             )}
                                         </div>
@@ -850,6 +961,109 @@ function AIChat() {
                 }}
             />
         </>
+    );
+}
+
+// Subcomponent for individual sortable item
+function ChatSessionItem({
+    session, activeChatId, contextMenu, editingSessionId, editingSessionTitle,
+    setActiveChatId, handleContextMenu, setEditingSessionId, setEditingSessionTitle,
+    updateChatSession, getLastTime, getLastMessage, t, loading
+}: any) {
+    const {
+        attributes,
+        listeners,
+        setNodeRef,
+        transform,
+        transition,
+    } = useSortable({ id: session.id });
+
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+    };
+
+    const isWorking = loading[`chat-${session.id}`];
+
+    return (
+        <div
+            ref={setNodeRef}
+            style={style}
+            className={`flex items-center px-3 py-2.5 cursor-pointer transition-colors group relative ${activeChatId === session.id || contextMenu?.sessionId === session.id
+                ? 'bg-black/[0.08] dark:bg-white/[0.08]'
+                : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.04]'
+                }`}
+            onClick={() => setActiveChatId(session.id)}
+            onContextMenu={(e) => handleContextMenu(e, session.id)}
+            {...(editingSessionId === session.id ? {} : attributes)}
+            {...(editingSessionId === session.id ? {} : listeners)}
+        >
+            <div className="relative shrink-0 mr-3">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shadow-sm bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5`}>
+                    {session.agentAvatarUrl ? (
+                        <img src={session.agentAvatarUrl} alt="Avatar" className="w-[85%] h-[85%] object-cover rounded-full" draggable={false} />
+                    ) : (
+                        <Bot size={17} className="text-[#07c160]" />
+                    )}
+                </div>
+                {session.pinned && (
+                    <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-white dark:bg-[#252525] rounded-full flex items-center justify-center shrink-0 z-10">
+                        <Pin size={9} className="text-[#07c160] rotate-45" fill="currentColor" />
+                    </div>
+                )}
+                {/* Working Indicator */}
+                {isWorking && (
+                    <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-white dark:bg-[#252525] rounded-full flex items-center justify-center shrink-0 z-10">
+                        <div className="w-2.5 h-2.5 bg-[#07c160] rounded-full animate-pulse" />
+                    </div>
+                )}
+                {/* Unread Badge */}
+                {activeChatId !== session.id && (session.unreadCount || 0) > 0 && !isWorking && (
+                    <div className="absolute -top-1.5 -left-1.5 w-[18px] h-[18px] bg-red-500 rounded-full text-[9px] font-bold text-white flex items-center justify-center border-2 border-[#f5f5f5] dark:border-[#252525] shrink-0 z-10">
+                        {session.unreadCount! > 99 ? '99+' : session.unreadCount}
+                    </div>
+                )}
+            </div>
+            <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between min-w-0">
+                    {editingSessionId === session.id ? (
+                        <input
+                            autoFocus
+                            className="w-full text-[13px] font-medium text-gray-800 dark:text-gray-200 bg-transparent border-b border-[#07c160] outline-none"
+                            value={editingSessionTitle}
+                            onChange={(e) => setEditingSessionTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    if (editingSessionTitle.trim()) updateChatSession(session.id, { title: editingSessionTitle.trim() });
+                                    setEditingSessionId(null);
+                                } else if (e.key === 'Escape') {
+                                    setEditingSessionId(null);
+                                }
+                            }}
+                            onBlur={() => {
+                                if (editingSessionTitle.trim()) updateChatSession(session.id, { title: editingSessionTitle.trim() });
+                                setEditingSessionId(null);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                        />
+                    ) : (
+                        <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate group-hover:text-gray-900 dark:group-hover:text-white transition-colors">{session.title}</span>
+                        </div>
+                    )}
+                    <span className="text-[10px] text-gray-400 shrink-0 ml-2">{getLastTime(session)}</span>
+                </div>
+                <div className="flex items-center justify-between mt-0.5">
+                    <p className="text-xs text-gray-400 truncate pr-2">
+                        {session.workspace
+                            ? <span className="flex items-center gap-1"><FolderOpen size={10} />{session.workspace.split('/').pop()}</span>
+                            : (getLastMessage(session) || <span className="italic opacity-50">{t('chat.new_chat', '新对话')}</span>)
+                        }
+                    </p>
+                </div>
+            </div>
+        </div>
     );
 }
 
