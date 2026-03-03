@@ -329,12 +329,17 @@ function AIChat() {
     };
 
     const handleSend = async () => {
-        if ((!input.trim() && pendingImages.length === 0) || isSessionLoading || isTeamRunning) return;
+        if (!input.trim() && pendingImages.length === 0) return;
+
         // Route to team handler for team sessions
         if (activeSession?.type === 'team') {
             await handleTeamSend();
             return;
         }
+
+        // Single chats block concurrent sending while agent is running
+        if (isSessionLoading) return;
+
         setAgentStatus([]);
         const msg = input.trim();
         const imgs = [...pendingImages];
@@ -1103,7 +1108,7 @@ function AIChat() {
                                         ref={textareaRef}
                                         className="w-full bg-transparent border-0 outline-none resize-none text-[13px] text-gray-800 dark:text-gray-200 placeholder:text-gray-400 px-5 pt-2 pb-1 min-h-[56px] max-h-[160px]"
                                         placeholder={activeSession?.type === 'team'
-                                            ? (isTeamRunning ? '团队协作中...' : '告诉林雨（项目经理），您想要开发点什么...')
+                                            ? (isTeamRunning ? '也可以在成员讨论时继续补充要求...' : '告诉团队你的想法，或者 @ 指定成员...')
                                             : t('chat.input_placeholder', '输入消息…')}
                                         value={input}
                                         onChange={handleInputChange}
