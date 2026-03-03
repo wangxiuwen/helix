@@ -6,6 +6,7 @@ import { AvatarPicker } from '../common/AvatarPicker';
 import { useConfigStore } from '../../stores/useConfigStore';
 import { useDevOpsStore, AIProvider } from '../../stores/useDevOpsStore';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
     MessageSquare, Settings as SettingsIcon,
     Menu, Sparkles, Moon, Sun, Book,
@@ -24,7 +25,7 @@ function Layout() {
     const navigate = useNavigate();
     const location = useLocation();
     const { config, saveConfig } = useConfigStore();
-    const { aiProviders, updateAIProvider, addAIProvider, removeAIProvider } = useDevOpsStore();
+    const { aiProviders, updateAIProvider, addAIProvider, removeAIProvider, setLanPeers } = useDevOpsStore();
     const isDark = config?.theme === 'dark';
 
     // More menu state
@@ -83,6 +84,98 @@ function Layout() {
         if (settingsSection === 'workspace') loadWsFiles();
         if (settingsSection === 'environments') loadEnvVars();
     }, [showSettings, settingsSection, loadWsFiles, loadEnvVars]);
+
+    // LAN Discovery Polling
+    useEffect(() => {
+        const fetchPeers = async () => {
+            try {
+                const results = await invoke<Record<string, any>>('get_lan_peers');
+                const peers = Object.values(results).map((device: any) => ({
+                    id: device.ip, // Use IP as the unique id for LAN peers in the contact list
+                    name: device.alias,
+                    icon: '💻', // Fallback if no avatar
+                    avatar: `https://api.dicebear.com/9.x/bottts/svg?seed=${device.fingerprint}`,
+                    color: '#07c160',
+                    role: '局域网用户',
+                    description: `设备: ${device.deviceModel || '未知'}`,
+                    systemPrompt: '',
+                    isLan: true,
+                    ip: device.ip,
+                    port: device.port,
+                    device: device.deviceModel
+                }));
+                // Only update the store state for transient LAN peers
+                setLanPeers(peers);
+            } catch (error) {
+                console.error("Failed to fetch LAN peers:", error);
+            }
+        };
+
+        fetchPeers();
+        const interval = setInterval(fetchPeers, 3000);
+        return () => clearInterval(interval);
+    }, [setLanPeers]);
+
+    // Global LAN Message Listener
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        const setupListener = async () => {
+            unlisten = await listen<any>('lan-message-received', (event) => {
+                console.log("[LAN Msg Event Raw]", event.payload);
+                const { name, content, session_id } = event.payload;
+                const state = useDevOpsStore.getState();
+                let targetSessionId = session_id;
+
+                // If the message has no explicit session_id (e.g., standard LocalSend mode), attempt to find an existing PM with this sender
+                if (!targetSessionId) {
+                    const existingChat = state.chatSessions.find(s => s.type === 'team' && s.title.includes(name));
+                    if (existingChat) {
+                        targetSessionId = existingChat.id;
+                    } else {
+                        // Create a new direct chat for this LAN peer
+                        targetSessionId = state.createChatSession(`与 ${name} 的对话`, undefined, 'team');
+                        // Try to find the LAN peer in store to add as member
+                        const peer = state.lanPeers.find(p => p.name === name || p.device === name);
+                        if (peer) {
+                            state.updateChatSession(targetSessionId, { members: [peer.id] });
+                        }
+                    }
+                } else {
+                    // It has a session ID, check if we need to create it
+                    const existingChat = state.chatSessions.find(s => s.id === targetSessionId);
+                    if (!existingChat) {
+                        // We probably don't want to blindly create arbitrary session IDs sent from network, but for now we do
+                        state.createChatSession(`LAN群聊 (${name})`, undefined, 'team');
+                        // wait createChatSession auto-generates id, so this wouldn't match targetSessionId.
+                        // Let's just create a new local session and ignore the remote session_id, OR we have to support importing external session IDs.
+                        // Actually, this is P2P. Let's just create a new session and update its ID to match if not exists.
+                        const newId = state.createChatSession(`LAN会话: ${name}`, undefined, 'team');
+                        targetSessionId = newId;
+                    }
+                }
+
+                if (targetSessionId) {
+                    const peerInfo = state.lanPeers.find(p => p.name === name || p.device === name);
+                    state.addTeamChatMessage(targetSessionId, {
+                        role: 'assistant', // treats incoming as non-user
+                        name: name,
+                        content: content,
+                        icon: peerInfo?.icon || '💻',
+                        avatar: peerInfo?.avatar
+                    });
+
+                    // Optional: trigger system notification
+                    if (document.hidden || state.activeChatId !== targetSessionId) {
+                        new Notification('Helix LAN', { body: `${name}: ${content}` });
+                    }
+                }
+            });
+        };
+        setupListener();
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, []);
 
     // Workspace handlers
     const wsSelectFile = async (name: string) => {

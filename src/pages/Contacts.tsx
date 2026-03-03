@@ -26,7 +26,7 @@ const ROLE_PRESETS = [
 
 function Contacts() {
     const { t } = useTranslation();
-    const { contacts, addContact, updateContact, removeContact } = useDevOpsStore();
+    const { contacts, lanPeers, addContact, updateContact, removeContact } = useDevOpsStore();
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [showAddForm, setShowAddForm] = useState(false);
@@ -38,10 +38,11 @@ function Contacts() {
         description: '', systemPrompt: '',
     });
 
-    const selected = contacts.find(c => c.id === selectedId) || null;
+    const allContacts = [...contacts, ...lanPeers];
+    const selected = allContacts.find(c => c.id === selectedId) || null;
 
-    const filtered = contacts.filter(c =>
-        !searchQuery || c.name.includes(searchQuery) || c.role.includes(searchQuery)
+    const filtered = allContacts.filter(c =>
+        !searchQuery || c.name.includes(searchQuery) || c.role.includes(searchQuery) || (c.device && c.device.includes(searchQuery))
     );
 
     // Group contacts by role
@@ -95,8 +96,8 @@ function Contacts() {
 
     // Auto-select first contact on mount
     useEffect(() => {
-        if (!selectedId && contacts.length > 0) setSelectedId(contacts[0].id);
-    }, [contacts.length]);
+        if (!selectedId && allContacts.length > 0) setSelectedId(allContacts[0].id);
+    }, [allContacts.length, selectedId]);
 
     // Detail / form right panel content
     const renderRightPanel = () => {
@@ -261,7 +262,17 @@ function Contacts() {
                                 </span>
                             </div>
                         </div>
-                        {selected.systemPrompt && (
+                        {selected.device && (
+                            <div className="mx-6 border-t border-gray-100 dark:border-gray-700/50">
+                                <div className="py-4 flex items-center gap-3">
+                                    <span className="text-[12px] text-gray-400 w-16 shrink-0">IP</span>
+                                    <span className="text-[13px] text-gray-700 dark:text-gray-300 font-mono">
+                                        {selected.ip}:{selected.port}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                        {selected.systemPrompt && !selected.isLan && (
                             <div className="mx-6 border-t border-gray-100 dark:border-gray-700/50">
                                 <div className="py-4">
                                     <span className="text-[12px] text-gray-400 block mb-2">系统提示词</span>
@@ -273,20 +284,22 @@ function Contacts() {
                         )}
 
                         {/* Actions */}
-                        <div className="mx-6 border-t border-gray-100 dark:border-gray-700/50 py-4 flex gap-2">
-                            <button
-                                onClick={() => openEditForm(selected)}
-                                className="flex-1 py-2.5 text-[12px] bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors flex items-center justify-center gap-1.5"
-                            >
-                                <Edit3 size={13} /> 编辑资料
-                            </button>
-                            <button
-                                onClick={() => handleDelete(selected.id)}
-                                className="px-5 py-2.5 text-[12px] text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors flex items-center gap-1.5"
-                            >
-                                <Trash2 size={13} /> 删除
-                            </button>
-                        </div>
+                        {!selected.isLan && (
+                            <div className="mx-6 border-t border-gray-100 dark:border-gray-700/50 py-4 flex gap-2">
+                                <button
+                                    onClick={() => openEditForm(selected)}
+                                    className="flex-1 py-2.5 text-[12px] bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors flex items-center justify-center gap-1.5"
+                                >
+                                    <Edit3 size={13} /> 编辑资料
+                                </button>
+                                <button
+                                    onClick={() => handleDelete(selected.id)}
+                                    className="px-5 py-2.5 text-[12px] text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors flex items-center gap-1.5"
+                                >
+                                    <Trash2 size={13} /> 删除
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             );

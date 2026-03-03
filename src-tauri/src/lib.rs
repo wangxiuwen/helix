@@ -239,6 +239,22 @@ pub fn run() {
             // Start embedded HTTP API server with Swagger UI
             modules::api_server::start_api_server(9520);
 
+            // Start LAN HTTP Server and UDP Broadcaster
+            let lan_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let alias = hostname::get()
+                    .unwrap_or_else(|_| std::ffi::OsString::from("Helix Peer"))
+                    .to_string_lossy()
+                    .to_string();
+                
+                if let Err(e) = modules::lan_server::start_lan_server(Some(lan_handle.clone()), 53317).await {
+                    error!("Failed to start LAN P2P HTTP server: {}", e);
+                }
+                if let Err(e) = modules::udp_discovery::start_udp_discovery(alias, 53317).await {
+                    error!("Failed to start LAN UDP discovery: {}", e);
+                }
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -448,6 +464,9 @@ pub fn run() {
             modules::ai::context::brain_list_knowledge,
             modules::ai::context::brain_delete_knowledge,
             modules::ai::context::brain_get_context,
+            // LAN P2P
+            modules::lan_client::get_lan_peers,
+            modules::lan_client::send_lan_message,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

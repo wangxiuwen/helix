@@ -1,22 +1,69 @@
 import { invoke } from '@tauri-apps/api/core';
-import { ROLES, getRole } from './roles';
+// roles.ts still available if needed for backward compat
 import { LLMProvider } from './llm';
 import { maskToolOutputs, checkOverflow, compressChat } from './contextManager';
+
+export interface SessionMember {
+    id: string;
+    name: string;
+    role: string;
+    systemPrompt: string;
+    icon?: string;
+    avatar?: string;
+}
+
+const BUTLER_SYSTEM_PROMPT = `你是 **Helix 大管家**，一个全能的 AI 团队协调者。
+
+# 你的角色
+你是团队的核心协调人。你的职责是：接收用户需求，协调团队成员完成任务。
+
+# 工作流程
+
+## 1: 需求分析
+收到新需求后，先分析需求，确定需要哪些成员参与。
+如果需求复杂，可以 CALL **group_discuss** 发起团队讨论。
+
+## 2: 任务分配
+分析完需求后，使用 **delegate_to** 将具体任务分配给合适的成员。
+等待结果，跟踪进度。
+
+## 3: 结果交付
+所有任务完成后，输出最终总结报告。
+
+# 工具
+- **group_discuss**: 发起团队讨论，让相关成员发表观点。
+- **delegate_to**: 将具体任务委派给团队成员执行。
+
+# 规则
+- 所有回复使用中文。
+- 简洁高效，注重交付。
+- 根据成员的专长合理分配任务。`;
 
 export class TeamOrchestrator {
     private llm = new LLMProvider();
     private history: any[] = [];
 
-    async handleRequest(topic: string, workspaceDir: string, onEvent: (evt: any) => void, mentionedRoles?: Array<{ role: string, name: string, systemPrompt: string }>, isImplicitBroadcast?: boolean) {
+    async handleRequest(
+        topic: string,
+        workspaceDir: string,
+        onEvent: (evt: any) => void,
+        sessionMembers: SessionMember[],
+        mentionedRoles?: Array<{ role: string, name: string, systemPrompt: string }>,
+        isImplicitBroadcast?: boolean
+    ) {
         onEvent({ type: 'team_start', data: topic });
 
         let initialDiscussionSummary = "";
+
+        // Build dynamic member list for tools
+        const memberNameMap = Object.fromEntries(sessionMembers.map(m => [m.id, m]));
 
         // If specific members were @mentioned (or all members in group chat), each responds
         if (mentionedRoles && mentionedRoles.length > 0) {
             let discussionContext = `用户说: ${topic}`;
             for (const mr of mentionedRoles) {
-                const roleId = Object.entries(ROLES).find(([_, r]) => r.name === mr.name)?.[0] || 'developer';
+                const member = sessionMembers.find(m => m.name === mr.name);
+                const roleId = member?.id || 'assistant';
                 onEvent({ type: 'progress', data: { role: roleId, name: mr.name, action: `${mr.name} 正在思考...` } });
                 try {
                     let output = '';
@@ -43,7 +90,6 @@ export class TeamOrchestrator {
                     }
 
                     onEvent({ type: 'result', data: { role: roleId, name: mr.name, content: output } });
-                    // Accumulate context so next member sees previous responses
                     discussionContext += `\n\n[${mr.name}]: ${output}`;
                     initialDiscussionSummary += `\n\n[${mr.name}]: ${output}`;
                 } catch (err: any) {
@@ -51,8 +97,6 @@ export class TeamOrchestrator {
                 }
             }
 
-            // If it's a specific @mention (not implicit), we end here.
-            // But for general group chat, we CONTINUE to the PM coordination loop.
             if (!isImplicitBroadcast) {
                 onEvent({ type: 'team_done' });
                 return;
@@ -62,11 +106,10 @@ export class TeamOrchestrator {
         let rounds = 0;
         this.history.push({ role: 'user', content: topic });
 
-        // If we had an initial broadcast discussion, tell the PM about it
         if (initialDiscussionSummary) {
             this.history.push({
                 role: 'assistant',
-                content: `大家已经完成了初步表态：${initialDiscussionSummary}\n\n作为 PM，我将根据以上讨论引导后续行动或进一步探讨。`
+                content: `大家已经完成了初步表态：${initialDiscussionSummary}\n\n作为大管家，我将根据以上讨论引导后续行动或进一步探讨。`
             });
         }
 
@@ -83,82 +126,89 @@ export class TeamOrchestrator {
             console.error('Failed to load antigravity context', e);
         }
 
+        // Build dynamic tool definitions based on actual session members (excluding butler)
+        const delegatableMembers = sessionMembers.filter(m => m.id !== 'c-butler');
+        const memberEnumIds = delegatableMembers.map(m => m.id);
+        const memberDescriptions = delegatableMembers.map(m => `${m.id}: ${m.name} (${m.role})`).join(', ');
+
+        const butlerPrompt = BUTLER_SYSTEM_PROMPT + `\n\n# 当前团队成员\n${delegatableMembers.map(m => `- **${m.name}** (${m.role}): ${m.systemPrompt || '无特殊说明'}`).join('\n')}`;
+
+        const tools: any[] = [];
+        if (memberEnumIds.length > 0) {
+            tools.push(
+                {
+                    type: 'function',
+                    function: {
+                        name: 'group_discuss',
+                        description: `Initiate a group discussion among team members. Available: ${memberDescriptions}`,
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                topic: { type: 'string' },
+                                participants: {
+                                    type: 'array',
+                                    items: { type: 'string', enum: memberEnumIds }
+                                }
+                            },
+                            required: ['topic', 'participants']
+                        }
+                    }
+                },
+                {
+                    type: 'function',
+                    function: {
+                        name: 'delegate_to',
+                        description: `Delegate a specific task to a team member. Available: ${memberDescriptions}`,
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                member_id: { type: 'string', enum: memberEnumIds, description: 'ID of the member to delegate to' },
+                                task: { type: 'string' }
+                            },
+                            required: ['member_id', 'task']
+                        }
+                    }
+                }
+            );
+        }
+
         while (rounds < 30) {
             rounds++;
 
-            // Context Manager Layer 1: Mask tool outputs before sending
             this.history = maskToolOutputs(this.history);
 
-            // Context Manager Layer 2: Chat Compression (every 5 rounds)
             if (rounds > 1 && rounds % 5 === 0) {
                 const compResult = await compressChat(this.history, this.llm);
                 if (compResult.compressed) {
                     this.history = compResult.messages;
-                    onEvent({ type: 'progress', data: { role: 'pm', name: ROLES.pm.name, action: `[系统] 对话已成功压缩，节省上下文空间` } });
+                    onEvent({ type: 'progress', data: { role: 'c-butler', name: 'Helix 大管家', action: `[系统] 对话已成功压缩，节省上下文空间` } });
                 }
             }
 
-            // Context Manager Layer 3: Overflow Prevention
-            const overflowCheck = checkOverflow(this.history, ROLES.pm.systemPrompt + workspaceContext);
+            const overflowCheck = checkOverflow(this.history, butlerPrompt + workspaceContext);
             onEvent({ type: 'loop_info', data: `[Loop ${rounds}] Messages: ${this.history.length} | Tokens: ~${overflowCheck.totalTokens} | Context: ${overflowCheck.usagePercent}%` });
 
             if (!overflowCheck.safe) {
-                onEvent({ type: 'progress', data: { role: 'pm', name: '系统警报', action: `🚨 上下文已满 (${overflowCheck.usagePercent}%)。正在紧急阻断，请开启新对话...` } });
-
-                // Emergency trim as a last resort
+                onEvent({ type: 'progress', data: { role: 'c-butler', name: '系统警报', action: `🚨 上下文已满 (${overflowCheck.usagePercent}%)。正在紧急阻断，请开启新对话...` } });
                 this.history = this.history.slice(Math.floor(this.history.length * 0.7));
                 this.history.unshift({ role: 'assistant', content: '[Earlier context was truncated due to context window overflow]' });
             }
 
-            onEvent({ type: 'progress', data: { role: 'pm', name: ROLES.pm.name, action: `PM 思考中 (Round ${rounds})...` } });
+            onEvent({ type: 'progress', data: { role: 'c-butler', name: 'Helix 大管家', action: `大管家思考中 (Round ${rounds})...` } });
 
             let msg;
             try {
                 msg = await this.llm.chat([
-                    { role: 'system', content: ROLES.pm.systemPrompt + workspaceContext },
+                    { role: 'system', content: butlerPrompt + workspaceContext },
                     ...this.history
-                ], [
-                    {
-                        type: 'function',
-                        function: {
-                            name: 'group_discuss',
-                            description: 'Initiate a group discussion among team members.',
-                            parameters: {
-                                type: 'object',
-                                properties: {
-                                    topic: { type: 'string' },
-                                    participants: {
-                                        type: 'array',
-                                        items: { type: 'string', enum: ['product', 'architect', 'developer', 'tester', 'teaching'] }
-                                    }
-                                },
-                                required: ['topic', 'participants']
-                            }
-                        }
-                    },
-                    {
-                        type: 'function',
-                        function: {
-                            name: 'delegate_to',
-                            description: 'Delegate a specific task to a specialist team member.',
-                            parameters: {
-                                type: 'object',
-                                properties: {
-                                    role: { type: 'string', enum: ['product', 'architect', 'developer', 'tester', 'teaching'] },
-                                    task: { type: 'string' }
-                                },
-                                required: ['role', 'task']
-                            }
-                        }
-                    }
-                ]);
+                ], tools.length > 0 ? tools : undefined);
             } catch (err: any) {
-                onEvent({ type: 'error', data: `PM Error: ${err.message}` });
+                onEvent({ type: 'error', data: `大管家 Error: ${err.message}` });
                 break;
             }
 
             if (msg.tool_calls) {
-                this.history.push(msg); // push assistant message with tool calls
+                this.history.push(msg);
 
                 for (const tc of msg.tool_calls) {
                     let args;
@@ -171,23 +221,26 @@ export class TeamOrchestrator {
                     let resultStr = "";
                     if (tc.function.name === 'group_discuss') {
                         onEvent({ type: 'group_start', data: { topic: args.topic } });
-                        resultStr = await this.runGroupDiscuss(args.topic, args.participants || [], onEvent);
+                        resultStr = await this.runGroupDiscuss(args.topic, args.participants || [], sessionMembers, onEvent);
                     } else if (tc.function.name === 'delegate_to') {
-                        const roleDef = getRole(args.role);
-                        onEvent({ type: 'progress', data: { role: args.role, name: roleDef?.name, action: `正在执行任务... (${args.task})` } });
+                        const memberId = args.member_id || args.role; // backward compat
+                        const member = memberNameMap[memberId] || sessionMembers.find(m => m.name === memberId);
+                        const memberName = member?.name || memberId;
+                        const memberRole = member?.role || 'assistant';
+                        onEvent({ type: 'progress', data: { role: memberId, name: memberName, action: `正在执行任务... (${args.task})` } });
 
                         try {
                             const subResult: any = await invoke('spawn_subagent', {
                                 task: args.task + (workspaceDir ? `\n\nIMPORTANT: Use this directory for ALL file outputs (create it if needed): ${workspaceDir}` : ''),
-                                systemPrompt: roleDef?.systemPrompt || `You are ${args.role}`,
+                                systemPrompt: member?.systemPrompt || `你是${memberName}（${memberRole}），完成用户的任务。`,
                                 maxRounds: 10
                             });
                             resultStr = subResult.output;
-                            onEvent({ type: 'result', data: { role: args.role, name: roleDef?.name, content: resultStr } });
+                            onEvent({ type: 'result', data: { role: memberId, name: memberName, content: resultStr } });
                         } catch (subErr: any) {
                             resultStr = `执行失败: ${subErr}`;
-                            onEvent({ type: 'result', data: { role: args.role, name: roleDef?.name, content: resultStr } });
-                            onEvent({ type: 'error', data: `[${roleDef?.name}] Error: ${subErr}` });
+                            onEvent({ type: 'result', data: { role: memberId, name: memberName, content: resultStr } });
+                            onEvent({ type: 'error', data: `[${memberName}] Error: ${subErr}` });
                         }
                     } else {
                         resultStr = "Unknown tool";
@@ -201,33 +254,33 @@ export class TeamOrchestrator {
                     });
                 }
             } else {
-                onEvent({ type: 'result', data: { role: 'pm', name: ROLES.pm.name, content: msg.content } });
+                onEvent({ type: 'result', data: { role: 'c-butler', name: 'Helix 大管家', content: msg.content } });
                 break;
             }
         }
         onEvent({ type: 'team_done' });
     }
 
-    private async runGroupDiscuss(topic: string, participants: string[], onEvent: any): Promise<string> {
+    private async runGroupDiscuss(topic: string, participantIds: string[], sessionMembers: SessionMember[], onEvent: any): Promise<string> {
         let summary = `【讨论主题】: ${topic}\n`;
-        for (const roleId of participants) {
-            const role = getRole(roleId);
-            if (!role) continue;
+        for (const memberId of participantIds) {
+            const member = sessionMembers.find(m => m.id === memberId);
+            if (!member) continue;
 
-            onEvent({ type: 'progress', data: { role: roleId, name: role.name, action: `发表观点中...` } });
+            onEvent({ type: 'progress', data: { role: memberId, name: member.name, action: `发表观点中...` } });
 
             try {
                 const pMsg = await this.llm.chat([
-                    { role: 'system', content: `你是团队中的【${role.name}】。根据你的角色利益直白地发表观点。避免长篇大论，口语化直接反驳不合理的地方。` },
+                    { role: 'system', content: `你是团队中的【${member.name}】(${member.role})。根据你的角色利益直白地发表观点。避免长篇大论，口语化直接反驳不合理的地方。` },
                     { role: 'user', content: summary }
                 ]);
                 const text = pMsg.content || '';
-                summary += `\n[${role.name}]: ${text}`;
-                onEvent({ type: 'result', data: { role: roleId, name: role.name, content: text } });
+                summary += `\n[${member.name}]: ${text}`;
+                onEvent({ type: 'result', data: { role: memberId, name: member.name, content: text } });
             } catch (err: any) {
                 const text = `⚠️ (连接异常，无法发表观点): ${err.message || String(err)}`;
-                summary += `\n[${role.name}]: ${text}`;
-                onEvent({ type: 'result', data: { role: roleId, name: role.name, content: text } });
+                summary += `\n[${member.name}]: ${text}`;
+                onEvent({ type: 'result', data: { role: memberId, name: member.name, content: text } });
             }
         }
         return summary;

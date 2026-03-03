@@ -78,12 +78,17 @@ export interface VirtualContact {
     role: string;        // Role title, e.g. '项目经理'
     description?: string; // Brief description
     systemPrompt: string; // AI system prompt for this persona
+    // LAN properties
+    isLan?: boolean;
+    ip?: string;
+    port?: number;
+    device?: string;
 }
 
 export interface ChatSession {
     id: string;
     title: string;
-    type?: 'chat' | 'team'; // Session type: normal chat or multi-agent team
+    type?: 'chat' | 'team' | 'lan'; // Session type: normal chat, multi-agent team, or LAN P2P
     members?: string[];    // Contact IDs for team sessions
     messages: ChatMessage[];
     workspace?: string;  // working directory for this session
@@ -183,6 +188,7 @@ interface helixState {
     chatSessions: ChatSession[];
     activeChatId: string | null;
     contacts: VirtualContact[];
+    lanPeers: VirtualContact[]; // Transient LAN peers
     tasks: AutoTask[];
     alerts: AlertRule[];
     logs: LogEntry[];
@@ -207,7 +213,7 @@ interface helixState {
     updateAIProvider: (id: string, updates: Partial<AIProvider>) => void;
 
     // Chat
-    createChatSession: (title?: string, workspace?: string, type?: 'chat' | 'team') => string;
+    createChatSession: (title?: string, workspace?: string, type?: 'chat' | 'team' | 'lan') => string;
     deleteChatSession: (id: string) => void;
     setActiveChatId: (id: string | null) => void;
     updateChatSession: (id: string, updates: Partial<ChatSession>) => void;
@@ -218,10 +224,11 @@ interface helixState {
     addTeamChatMessage: (sessionId: string, msg: Omit<ChatMessage, 'id' | 'timestamp'>) => string;
     updateTeamChatMessage: (sessionId: string, msgId: string, updates: Partial<ChatMessage>) => void;
 
-    // Contacts
+    // Contacts & LAN Peers
     addContact: (contact: Omit<VirtualContact, 'id'>) => string;
     updateContact: (id: string, updates: Partial<VirtualContact>) => void;
     removeContact: (id: string) => void;
+    setLanPeers: (peers: VirtualContact[]) => void;
 
     // Task
     addTask: (task: Omit<AutoTask, 'id'>) => void;
@@ -274,6 +281,7 @@ export const useDevOpsStore = create<helixState>()(
             chatSessions: [],
             activeChatId: null,
             contacts: [],
+            lanPeers: [],
             tasks: [],
             alerts: [],
             logs: [],
@@ -351,9 +359,12 @@ export const useDevOpsStore = create<helixState>()(
                 const id = generateId();
                 const autoWorkspace = workspace || `~/.helix/sandbox/${id}`;
                 const session: ChatSession = {
-                    id, title: title || (type === 'team' ? `群聊 ${new Date().toLocaleString()}` : `新对话 ${new Date().toLocaleString()}`),
+                    id, title: title || `新对话 ${new Date().toLocaleString()}`,
                     type: type || 'chat',
-                    members: type === 'team' ? [] : undefined,
+                    members: type === 'team' ? (() => {
+                        const butler = get().contacts.find(c => c.id === 'c-butler');
+                        return butler ? [butler.id] : [];
+                    })() : undefined,
                     messages: [], workspace: autoWorkspace, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
                 };
                 set((s) => ({ chatSessions: [session, ...s.chatSessions], activeChatId: id }));
@@ -664,10 +675,11 @@ export const useDevOpsStore = create<helixState>()(
                         cs.members ? { ...cs, members: cs.members.filter(m => m !== id) } : cs
                     ),
                 })),
+            setLanPeers: (peers) => set({ lanPeers: peers }),
         }),
         {
             name: 'devhelix-storage',
-            version: 3,
+            version: 4,
             migrate: (persistedState: any, version: number) => {
                 if (version === 0) {
                     // v0→v1: Remove pre-populated default providers that had no API key configured
@@ -719,6 +731,16 @@ export const useDevOpsStore = create<helixState>()(
                             }
                             return cs;
                         });
+                    }
+                }
+                if (version < 4) {
+                    // v3→v4: Add default "大管家" (Butler) contact
+                    const contacts = persistedState.contacts || [];
+                    if (!contacts.find((c: any) => c.id === 'c-butler')) {
+                        persistedState.contacts = [
+                            { id: 'c-butler', name: 'Helix 大管家', icon: '🤖', avatar: 'https://api.dicebear.com/9.x/bottts-neutral/svg?seed=HelixButler', color: '#07c160', role: 'AI 助手', description: '你的智能管家，随时为你服务', systemPrompt: '你是 Helix 大管家，一个全能的 AI 助手。回答简洁、专业、友善。' },
+                            ...contacts,
+                        ];
                     }
                 }
                 // Ensure loading is initialized properly after hydration

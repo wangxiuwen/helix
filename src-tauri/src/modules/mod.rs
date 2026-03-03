@@ -12,6 +12,7 @@ pub mod chat;      // channels, sessions, messaging
 pub mod cloud;     // kubeconfig, aliyun
 pub mod browser;   // browser engine
 pub mod evomap;    // EvoMap
+pub mod lan;       // LocalSend P2P Protocol
 
 // ============================================================================
 // Backward-compatible re-exports
@@ -71,6 +72,11 @@ pub use cloud::aliyun;
 
 // browser
 pub use browser::engine as browser_engine;
+
+// lan
+pub use lan::udp_discovery;
+pub use lan::lan_server;
+pub use lan::lan_client;
 
 // Top-level re-exports from config
 pub use config::*;

@@ -42,7 +42,8 @@ import {
     Users,
     Wrench,
     X,
-    Download
+    Download,
+    Wifi
 } from 'lucide-react';
 import { TeamOrchestrator } from '../services/team/orchestrator';
 import { getRole } from '../services/team/roles';
@@ -119,6 +120,7 @@ function AIChat() {
         addTeamChatMessage,
         updateTeamChatMessage,
         contacts,
+        lanPeers,
     } = useDevOpsStore();
 
     const [isTeamRunning, setIsTeamRunning] = useState(false);
@@ -169,8 +171,6 @@ function AIChat() {
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, sessionId: string } | null>(null);
     const contextMenuRef = useRef<HTMLDivElement>(null);
     const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-    const [showNewMenu, setShowNewMenu] = useState(false);
-    const newMenuRef = useRef<HTMLDivElement>(null);
     const [showMentionPopup, setShowMentionPopup] = useState(false);
     const [mentionFilter, setMentionFilter] = useState('');
     const [mentionIndex, setMentionIndex] = useState(0);
@@ -179,7 +179,8 @@ function AIChat() {
     // Compute mention list for keyboard nav + rendering
     const mentionList = (() => {
         if (!showMentionPopup || activeSession?.type !== 'team') return [];
-        const sessionMembers = (activeSession.members || []).map(id => (contacts || []).find(c => c.id === id)).filter(Boolean) as VirtualContact[];
+        const allContacts = [...(contacts || []), ...(lanPeers || [])];
+        const sessionMembers = (activeSession.members || []).map(id => allContacts.find(c => c.id === id)).filter(Boolean) as VirtualContact[];
 
         const q = mentionFilter.toLowerCase();
         const filtered = sessionMembers.filter(c =>
@@ -251,24 +252,44 @@ function AIChat() {
 
     // Close menus on outside click
     useEffect(() => {
-        const handler = (e: MouseEvent) => {
-            if (providerMenuRef.current && !providerMenuRef.current.contains(e.target as Node)) setShowProviderMenu(false);
-            if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) setShowModelMenu(false);
-            if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) setContextMenu(null);
-            else if (!contextMenuRef.current) setContextMenu(null);
-            if (newMenuRef.current && !newMenuRef.current.contains(e.target as Node)) setShowNewMenu(false);
+        const handleClickOutside = (e: MouseEvent) => {
+            if (providerMenuRef.current && !providerMenuRef.current.contains(e.target as Node)) {
+                setShowProviderMenu(false);
+            }
+            if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
+                setShowModelMenu(false);
+            }
+            if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+                setContextMenu(null);
+            }
 
-            // Close @ mention popup if clicking outside textarea
-            if (showMentionPopup && textareaRef.current && !textareaRef.current.contains(e.target as Node)) {
-                // Ignore clicks on the popup itself
-                const popup = document.getElementById('mention-popup');
-                if (popup && popup.contains(e.target as Node)) return;
-                setShowMentionPopup(false);
+            // Mention popup dismissal
+            if (showMentionPopup) {
+                const mentionContainer = document.getElementById('mention-popup-container');
+                const textarea = textareaRef.current;
+
+                // If click is not in popup AND not in textarea, close it
+                if (mentionContainer &&
+                    !mentionContainer.contains(e.target as Node) &&
+                    textarea &&
+                    !textarea.contains(e.target as Node)) {
+                    setShowMentionPopup(false);
+                }
             }
         };
-        document.addEventListener('mousedown', handler);
-        return () => document.removeEventListener('mousedown', handler);
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [showMentionPopup]);
+
+    // Scroll mention popup item into view when navigating with keyboard
+    useEffect(() => {
+        if (showMentionPopup && isKeyboardSelecting) {
+            const el = document.getElementById(`mention-item-${mentionIndex}`);
+            if (el) {
+                el.scrollIntoView({ block: 'nearest' });
+            }
+        }
+    }, [mentionIndex, showMentionPopup, isKeyboardSelecting]);
 
     // Context Menu Handlers
     const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
@@ -378,9 +399,12 @@ function AIChat() {
         const mentionedNames = Array.from(req.matchAll(/@([^\s@]+)/g)).map(m => m[1]);
         const hasMentionAll = mentionedNames.some(name => name === 'all' || name === '所有人');
 
+        const state = useDevOpsStore.getState();
+        const allContacts = [...state.contacts, ...state.lanPeers];
+
         const mentionedContacts = mentionedNames
             .filter(name => name !== 'all' && name !== '所有人')
-            .map(name => (contacts || []).find(c => c.name === name))
+            .map(name => allContacts.find(c => c.name === name))
             .filter(Boolean) as VirtualContact[];
 
         let targetSessionId = activeChatId;
@@ -388,7 +412,6 @@ function AIChat() {
             targetSessionId = createChatSession(req.substring(0, 20), undefined, 'team');
         }
 
-        const state = useDevOpsStore.getState();
         const freshSession = state.chatSessions.find(s => s.id === targetSessionId);
         let wsDir = freshSession?.workspace;
 
@@ -420,14 +443,102 @@ function AIChat() {
         let isImplicitBroadcast = false;
         if ((effectiveContacts.length === 0 || hasMentionAll) && freshSession?.type === 'team') {
             const sessionMembers = (freshSession.members || [])
-                .map(id => (contacts || []).find(c => c.id === id))
+                .map(id => allContacts.find(c => c.id === id))
                 .filter(Boolean) as VirtualContact[];
             effectiveContacts = sessionMembers;
             isImplicitBroadcast = true;
         }
 
-        const mentionedRoles = effectiveContacts.map(mc => ({
+        // Separate AI agents vs LAN peers
+        const aiAgents = effectiveContacts.filter(c => !c.isLan);
+        const lanPeersToMessage = effectiveContacts.filter(c => c.isLan);
+
+        // 1. Dispatch to LAN Peers asynchronously
+        for (const peer of lanPeersToMessage) {
+            if (!peer.ip) continue;
+            invoke('send_lan_message', {
+                ip: peer.ip,
+                port: peer.port || 53317,
+                payload: {
+                    session_id: targetSessionId,
+                    role: 'user',
+                    name: 'Helix 用户',
+                    content: req,
+                    reply_to: null
+                }
+            }).then(() => {
+                addTeamChatMessage(targetSessionId!, {
+                    role: 'system', name: 'System',
+                    content: `📡 成功发送到局域网用户: **${peer.name}**`,
+                    icon: '✅',
+                });
+            }).catch((e) => {
+                addTeamChatMessage(targetSessionId!, {
+                    role: 'system', name: 'System',
+                    content: `❌ 发送到局域网用户 **${peer.name}** 失败: ${e}`,
+                    icon: '⚠️',
+                });
+            });
+        }
+
+        // 2. Dispatch to local AI Agents via Orchestrator
+        if (aiAgents.length === 0) {
+            setIsTeamRunning(false);
+            return;
+        }
+
+        // === Single-agent fast path: direct LLM chat (no PM orchestrator) ===
+        if (aiAgents.length === 1 && !hasMentionAll) {
+            const agent = aiAgents[0];
+            const roleId = 'assistant';
+            const customContact = (contacts || []).find(c => c.name === agent.name);
+            const progressId = addTeamChatMessage(targetSessionId!, {
+                role: roleId,
+                name: agent.name,
+                action: `${agent.name} 正在思考...`,
+                content: '',
+                icon: customContact?.icon || '🤖',
+                avatar: customContact?.avatar,
+                isProgress: true,
+            });
+            try {
+                const { LLMProvider } = await import('../services/team/llm');
+                const llm = new LLMProvider();
+                // Build conversation history from session messages
+                const freshSt = useDevOpsStore.getState();
+                const freshSess = freshSt.chatSessions.find(s => s.id === targetSessionId);
+                const historyMsgs = (freshSess?.messages || [])
+                    .filter(m => m.role === 'user' || (m.role !== 'system' && m.content && !m.isProgress))
+                    .slice(-20)
+                    .map(m => ({ role: m.role === 'user' ? 'user' as const : 'assistant' as const, content: m.content }));
+                const sysPrompt = agent.systemPrompt || `你是${agent.name}（${agent.role}），一个专业的 AI 助手。回答简洁、专业、友善。`;
+                const res = await llm.chat([
+                    { role: 'system', content: sysPrompt + (wsDir ? `\n\n相关目录: ${wsDir}` : '') },
+                    ...historyMsgs,
+                ]);
+                updateTeamChatMessage(targetSessionId!, progressId, {
+                    content: res.content || '(无回复)',
+                    isProgress: false,
+                    action: undefined,
+                });
+            } catch (err: any) {
+                updateTeamChatMessage(targetSessionId!, progressId, {
+                    content: `执行失败: ${err.message || err}`,
+                    isProgress: false,
+                    action: undefined,
+                });
+            }
+            setIsTeamRunning(false);
+            return;
+        }
+
+        const mentionedRoles = aiAgents.map(mc => ({
             role: mc.role, name: mc.name, systemPrompt: mc.systemPrompt,
+        }));
+        // Build SessionMember list for the orchestrator
+        const sessionMembersList = aiAgents.map(mc => ({
+            id: mc.id, name: mc.name, role: mc.role, systemPrompt: mc.systemPrompt,
+            icon: mc.icon, avatar: mc.avatar,
         }));
         await orchestrator.handleRequest(req, wsDir || '', (evt: any) => {
             const st = useDevOpsStore.getState();
@@ -442,7 +553,7 @@ function AIChat() {
                         return;
                     }
                 }
-                const customContact = (contacts || []).find(c => c.name === evt.data.name);
+                const customContact = [...(contacts || []), ...(lanPeers || [])].find(c => c.name === evt.data.name || c.id === evt.data.role);
 
                 pendingProgressId = addTeamChatMessage(targetSessionId!, {
                     role: evt.data.role,
@@ -462,7 +573,7 @@ function AIChat() {
                     });
                     pendingProgressId = null;
                 } else {
-                    const customContact = (contacts || []).find(c => c.name === evt.data.name);
+                    const customContact = [...(contacts || []), ...(lanPeers || [])].find(c => c.name === evt.data.name || c.id === evt.data.role);
                     addTeamChatMessage(targetSessionId!, {
                         role: evt.data.role,
                         name: evt.data.name,
@@ -475,7 +586,7 @@ function AIChat() {
                 addTeamChatMessage(targetSessionId!, {
                     role: 'system',
                     name: 'System',
-                    content: `👨‍💻 **项目组正在开启专题讨论:** ${evt.data.topic}`,
+                    content: `👨‍💻 **团队正在开启专题讨论:** ${evt.data.topic}`,
                     icon: '👥',
                 });
             } else if (evt.type === 'error') {
@@ -486,7 +597,7 @@ function AIChat() {
                 setIsTeamRunning(false);
                 pendingProgressId = null;
             }
-        }, mentionedRoles.length > 0 ? mentionedRoles : undefined, isImplicitBroadcast);
+        }, sessionMembersList, mentionedRoles.length > 0 ? mentionedRoles : undefined, isImplicitBroadcast);
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -574,30 +685,14 @@ function AIChat() {
                             onChange={(e) => setSearchQuery(e.target.value)}
                         />
                     </div>
-                    <div className="relative" ref={newMenuRef}>
+                    <div>
                         <button
                             className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:bg-black/8 dark:hover:bg-white/10 transition-colors shrink-0"
-                            onClick={() => setShowNewMenu(!showNewMenu)}
+                            onClick={() => createChatSession(undefined, undefined, 'team')}
                             title={t('chat.new_session', '新对话')}
                         >
                             <Plus size={15} />
                         </button>
-                        {showNewMenu && (
-                            <div className="absolute right-0 top-full mt-1 min-w-[140px] bg-white dark:bg-[#2b2b2b] rounded-lg shadow-[0_5px_15px_rgba(0,0,0,0.1)] dark:shadow-[0_5px_15px_rgba(0,0,0,0.3)] ring-1 ring-black/5 dark:ring-white/5 py-1.5 px-1.5 z-50 flex flex-col gap-0.5">
-                                <button
-                                    className="w-full text-left px-3 py-2 rounded-md text-[13px] text-gray-800 dark:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors flex items-center gap-2"
-                                    onClick={() => { createChatSession(); setShowNewMenu(false); }}
-                                >
-                                    <Bot size={14} className="text-[#07c160]" /> {t('chat.new_chat', '新对话')}
-                                </button>
-                                <button
-                                    className="w-full text-left px-3 py-2 rounded-md text-[13px] text-gray-800 dark:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors flex items-center gap-2"
-                                    onClick={() => { createChatSession(undefined, undefined, 'team'); setShowNewMenu(false); }}
-                                >
-                                    <Users size={14} className="text-indigo-500" /> {t('chat.new_group', '新建群聊')}
-                                </button>
-                            </div>
-                        )}
                     </div>
                 </div>
 
@@ -725,21 +820,29 @@ function AIChat() {
                             data-tauri-drag-region
                         >
                             <div
-                                className={`w-7 h-7 rounded-sm overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity mr-3 ${activeSession.type === 'team' ? 'bg-gradient-to-br from-indigo-500 to-purple-500' : activeSession.agentAvatarUrl ? 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5' : 'bg-gradient-to-br from-[#07c160] to-[#05a050]'}`}
+                                className={`w-7 h-7 rounded-sm overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity mr-3 ${(activeSession.type === 'team' && (activeSession.members?.length || 0) >= 2) ? 'bg-gradient-to-br from-indigo-500 to-purple-500' : (
+                                    (activeSession.type === 'team' && activeSession.members?.length === 1 && [...(contacts || []), ...(lanPeers || [])].find(c => c.id === activeSession.members![0])?.avatar) || activeSession.agentAvatarUrl
+                                ) ? 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5' : 'bg-gradient-to-br from-[#07c160] to-[#05a050]'}`}
                                 onClick={() => activeSession.type !== 'team' && setShowAvatarPicker(true)}
-                                title={activeSession.type === 'team' ? '多智能体群聊' : t('chat.change_avatar', '更换助手头像')}
+                                title={(activeSession.type === 'team' && (activeSession.members?.length || 0) >= 2) ? '多智能体群聊' : t('chat.change_avatar', '更换助手头像')}
                                 style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                             >
-                                {activeSession.type === 'team' ? (
+                                {(activeSession.type === 'team' && (activeSession.members?.length || 0) >= 2) ? (
                                     <Users size={14} className="text-white" />
+                                ) : (activeSession.type === 'team' && activeSession.members?.length === 1 && [...(contacts || []), ...(lanPeers || [])].find(c => c.id === activeSession.members![0])?.avatar) ? (
+                                    <img src={[...(contacts || []), ...(lanPeers || [])].find(c => c.id === activeSession.members![0])!.avatar} alt="Agent" className="w-full h-full object-cover" />
                                 ) : activeSession.agentAvatarUrl ? (
                                     <img src={activeSession.agentAvatarUrl} alt="Agent" className="w-full h-full object-cover" />
                                 ) : (
                                     <Bot size={16} className="text-white" />
                                 )}
                             </div>
-                            <h3 className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate pointer-events-none">{activeSession.title}</h3>
-                            {activeSession.type === 'team' && (
+                            <h3 className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate pointer-events-none">
+                                {(activeSession.type === 'team' && activeSession.members?.length === 1 && activeSession.title.startsWith('新对话')) ?
+                                    ([...(contacts || []), ...(lanPeers || [])].find(c => c.id === activeSession.members![0])?.name || activeSession.title)
+                                    : activeSession.title}
+                            </h3>
+                            {(activeSession.type === 'team' && (activeSession.members?.length || 0) >= 2) && (
                                 <span className="text-[11px] text-indigo-500 ml-2 flex items-center gap-1 pointer-events-none">
                                     <Sparkles size={11} /> Multi-Agent
                                 </span>
@@ -1121,6 +1224,7 @@ function AIChat() {
                                                 {mentionList.map((c, idx) => (
                                                     <button
                                                         key={c.id}
+                                                        id={`mention-item-${idx}`}
                                                         className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${idx === mentionIndex ? 'bg-[#07c160]/10' : 'hover:bg-gray-50 dark:hover:bg-[#383838]'}`}
                                                         onMouseDown={(e) => { e.preventDefault(); insertMention(c); }}
                                                         onMouseEnter={() => { if (!isKeyboardSelecting) setMentionIndex(idx) }}
@@ -1142,7 +1246,7 @@ function AIChat() {
                                     <textarea
                                         ref={textareaRef}
                                         className="w-full bg-transparent border-0 outline-none resize-none text-[13px] text-gray-800 dark:text-gray-200 placeholder:text-gray-400 px-5 pt-2 pb-1 min-h-[56px] max-h-[160px]"
-                                        placeholder={activeSession?.type === 'team'
+                                        placeholder={(activeSession?.type === 'team' && (activeSession.members?.length || 0) >= 2)
                                             ? (isTeamRunning ? '也可以在成员讨论时继续补充要求...' : '告诉团队你的想法，或者 @ 指定成员...')
                                             : t('chat.input_placeholder', '输入消息…')}
                                         value={input}
@@ -1270,7 +1374,8 @@ function AIChat() {
 
                             {/* Group member panel — right sidebar for team sessions */}
                             {activeSession.type === 'team' && (() => {
-                                const sessionMembers = (activeSession.members || []).map(id => contacts.find(c => c.id === id)).filter(Boolean) as VirtualContact[];
+                                const allContacts = [...(contacts || []), ...(lanPeers || [])];
+                                const sessionMembers = (activeSession.members || []).map(id => allContacts.find(c => c.id === id)).filter(Boolean) as VirtualContact[];
                                 return (
                                     <div
                                         className={`shrink-0 bg-white dark:bg-[#2a2a2a] border-l border-black/[0.06] dark:border-white/[0.06] flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${showGroupPanel ? 'w-[220px] opacity-100' : 'w-0 opacity-0 border-l-0'
@@ -1350,7 +1455,8 @@ function AIChat() {
             />
             {/* WeChat-style Add Member Modal */}
             {showContactPicker && activeSession?.type === 'team' && (() => {
-                const nonMembers = (contacts || []).filter(c => !(activeSession.members || []).includes(c.id));
+                const allContacts = [...(contacts || []), ...(lanPeers || [])];
+                const nonMembers = allContacts.filter(c => !(activeSession.members || []).includes(c.id));
                 const filtered = nonMembers.filter(c => !contactPickerSearch || c.name.includes(contactPickerSearch) || c.role.includes(contactPickerSearch));
                 return (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => { setShowContactPicker(false); setSelectedToAdd([]); setContactPickerSearch(''); }}>
@@ -1438,6 +1544,10 @@ function ChatSessionItem({
     setActiveChatId, handleContextMenu, setEditingSessionId, setEditingSessionTitle,
     updateChatSession, getLastTime, getLastMessage, t, loading
 }: any) {
+    const isGroup = session.type === 'team' && (session.members?.length || 0) >= 2;
+    const singleMember = (session.type === 'team' && session.members?.length === 1)
+        ? [...(useDevOpsStore.getState().contacts || []), ...(useDevOpsStore.getState().lanPeers || [])].find(c => c.id === session.members![0])
+        : null;
     const {
         attributes,
         listeners,
@@ -1467,9 +1577,13 @@ function ChatSessionItem({
             {...(editingSessionId === session.id ? {} : listeners)}
         >
             <div className="relative shrink-0 mr-3">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shadow-sm ${session.type === 'team' ? 'bg-gradient-to-br from-indigo-500 to-purple-500' : 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5'}`}>
-                    {session.type === 'team' ? (
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shadow-sm ${isGroup ? 'bg-gradient-to-br from-indigo-500 to-purple-500' : session.type === 'lan' ? 'bg-[#07c160]/10 border border-[#07c160]/30' : (singleMember?.avatar || session.agentAvatarUrl) ? 'bg-white dark:bg-[#404040] border border-black/5 dark:border-white/5' : 'bg-gradient-to-br from-[#07c160] to-[#05a050]'}`}>
+                    {isGroup ? (
                         <Users size={17} className="text-white" />
+                    ) : session.type === 'lan' ? (
+                        <Wifi size={17} className="text-[#07c160]" />
+                    ) : singleMember?.avatar ? (
+                        <img src={singleMember.avatar} alt="Avatar" className="w-[85%] h-[85%] object-cover rounded-full" draggable={false} />
                     ) : session.agentAvatarUrl ? (
                         <img src={session.agentAvatarUrl} alt="Avatar" className="w-[85%] h-[85%] object-cover rounded-full" draggable={false} />
                     ) : (
@@ -1519,7 +1633,11 @@ function ChatSessionItem({
                         />
                     ) : (
                         <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate group-hover:text-gray-900 dark:group-hover:text-white transition-colors">{session.title}</span>
+                            <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200 truncate group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
+                                {(session.type === 'team' && session.members?.length === 1 && session.title.startsWith('新对话')) ?
+                                    (singleMember?.name || session.title)
+                                    : session.title}
+                            </span>
                         </div>
                     )}
                     <span className="text-[10px] text-gray-400 shrink-0 ml-2">{getLastTime(session)}</span>
