@@ -9,6 +9,8 @@ export class TeamOrchestrator {
     async handleRequest(topic: string, workspaceDir: string, onEvent: (evt: any) => void, mentionedRoles?: Array<{ role: string, name: string, systemPrompt: string }>, isImplicitBroadcast?: boolean) {
         onEvent({ type: 'team_start', data: topic });
 
+        let initialDiscussionSummary = "";
+
         // If specific members were @mentioned (or all members in group chat), each responds
         if (mentionedRoles && mentionedRoles.length > 0) {
             let discussionContext = `用户说: ${topic}`;
@@ -18,7 +20,12 @@ export class TeamOrchestrator {
                 try {
                     let output = '';
                     if (isImplicitBroadcast) {
-                        const sysPrompt = mr.systemPrompt || `你是团队中的【${mr.name}】(${mr.role})。根据你的专业角色直接发表你的观点和建议，简洁有力，不要客套话。如果有其他成员的发言，你可以回应他们的观点。`;
+                        const sysPrompt = mr.systemPrompt || `你是团队中的【${mr.name}】(${mr.role})。
+请针对当前用户的需求或当前的讨论进度，直接发表你的专业观点、建议或反驳。
+要求：
+1. 简洁有力，不废话，不要客套。
+2. 密切关注前面几位成员的发言，如果有不同意见或需要补充，请直接指出。
+3. 如果大家已经达成一致，请确认你的职责部分。`;
                         const res = await this.llm.chat([
                             { role: 'system', content: sysPrompt + (workspaceDir ? `\n\n相关目录: ${workspaceDir}` : '') },
                             { role: 'user', content: discussionContext }
@@ -36,16 +43,30 @@ export class TeamOrchestrator {
                     onEvent({ type: 'result', data: { role: roleId, name: mr.name, content: output } });
                     // Accumulate context so next member sees previous responses
                     discussionContext += `\n\n[${mr.name}]: ${output}`;
+                    initialDiscussionSummary += `\n\n[${mr.name}]: ${output}`;
                 } catch (err: any) {
                     onEvent({ type: 'result', data: { role: roleId, name: mr.name, content: `执行失败: ${err.message || err}` } });
                 }
             }
-            onEvent({ type: 'team_done' });
-            return;
+
+            // If it's a specific @mention (not implicit), we end here.
+            // But for general group chat, we CONTINUE to the PM coordination loop.
+            if (!isImplicitBroadcast) {
+                onEvent({ type: 'team_done' });
+                return;
+            }
         }
 
         let rounds = 0;
         this.history.push({ role: 'user', content: topic });
+
+        // If we had an initial broadcast discussion, tell the PM about it
+        if (initialDiscussionSummary) {
+            this.history.push({
+                role: 'assistant',
+                content: `大家已经完成了初步表态：${initialDiscussionSummary}\n\n作为 PM，我将根据以上讨论引导后续行动或进一步探讨。`
+            });
+        }
 
         let workspaceContext = workspaceDir
             ? `\n\n# Workspace Directory\nALL files MUST be written EXACTLY to this directory (create it if not exists): ${workspaceDir}`

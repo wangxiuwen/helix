@@ -67,7 +67,7 @@ pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, Stri
         .with_model(model)
         .with_system_prompt(&system_prompt)
         .with_tools(sdk_tools)
-        .with_max_iterations(params.max_rounds.unwrap_or(10))
+        .with_max_iterations(params.max_rounds.unwrap_or(10) as usize)
         .with_checkpointer(Arc::new(InMemoryCheckpointer::new()))
         .build()
         .map_err(|e| format!("Agent build: {}", e))?;

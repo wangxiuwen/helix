@@ -179,7 +179,14 @@ function AIChat() {
     const mentionList = (() => {
         if (!showMentionPopup || activeSession?.type !== 'team') return [];
         const sessionMembers = (activeSession.members || []).map(id => (contacts || []).find(c => c.id === id)).filter(Boolean) as VirtualContact[];
-        return sessionMembers.filter(c => !mentionFilter || c.name.includes(mentionFilter) || c.role.includes(mentionFilter));
+        const filtered = sessionMembers.filter(c => !mentionFilter || c.name.includes(mentionFilter) || c.role.includes(mentionFilter));
+
+        // Add "All" option
+        const allItem = { id: 'all', name: '所有人', role: 'all', avatar: '', systemPrompt: '', icon: '👥' } as any;
+        if (!mentionFilter || '所有人'.includes(mentionFilter) || 'all'.includes(mentionFilter.toLowerCase())) {
+            return [allItem, ...filtered];
+        }
+        return filtered;
     })();
 
     // Setup DnD sensors
@@ -299,7 +306,7 @@ function AIChat() {
         }
     };
 
-    const insertMention = (contact: VirtualContact) => {
+    const insertMention = (contact: VirtualContact | { name: string, id: string }) => {
         const el = textareaRef.current;
         const cursor = el?.selectionStart || input.length;
         const textBefore = input.substring(0, cursor);
@@ -348,7 +355,10 @@ function AIChat() {
 
         // Extract @mentions from the message
         const mentionedNames = Array.from(req.matchAll(/@([^\s@]+)/g)).map(m => m[1]);
+        const hasMentionAll = mentionedNames.some(name => name === 'all' || name === '所有人');
+
         const mentionedContacts = mentionedNames
+            .filter(name => name !== 'all' && name !== '所有人')
             .map(name => (contacts || []).find(c => c.name === name))
             .filter(Boolean) as VirtualContact[];
 
@@ -384,10 +394,10 @@ function AIChat() {
             }
         }
 
-        // Group chat: if no @mentions, ALL members should receive and respond
+        // Group chat: if no @mentions (or @all), ALL members should receive and respond
         let effectiveContacts = mentionedContacts;
         let isImplicitBroadcast = false;
-        if (effectiveContacts.length === 0 && freshSession?.type === 'team') {
+        if ((effectiveContacts.length === 0 || hasMentionAll) && freshSession?.type === 'team') {
             const sessionMembers = (freshSession.members || [])
                 .map(id => (contacts || []).find(c => c.id === id))
                 .filter(Boolean) as VirtualContact[];
