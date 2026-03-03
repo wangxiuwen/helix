@@ -174,16 +174,24 @@ function AIChat() {
     const [showMentionPopup, setShowMentionPopup] = useState(false);
     const [mentionFilter, setMentionFilter] = useState('');
     const [mentionIndex, setMentionIndex] = useState(0);
+    const [isKeyboardSelecting, setIsKeyboardSelecting] = useState(false);
 
     // Compute mention list for keyboard nav + rendering
     const mentionList = (() => {
         if (!showMentionPopup || activeSession?.type !== 'team') return [];
         const sessionMembers = (activeSession.members || []).map(id => (contacts || []).find(c => c.id === id)).filter(Boolean) as VirtualContact[];
-        const filtered = sessionMembers.filter(c => !mentionFilter || c.name.includes(mentionFilter) || c.role.includes(mentionFilter));
+
+        const q = mentionFilter.toLowerCase();
+        const filtered = sessionMembers.filter(c =>
+            !q ||
+            c.name.toLowerCase().includes(q) ||
+            c.role.toLowerCase().includes(q) ||
+            (c as any).pinyin?.includes(q) // if user adds pinyin later
+        );
 
         // Add "All" option
         const allItem = { id: 'all', name: '所有人', role: 'all', avatar: '', systemPrompt: '', icon: '👥' } as any;
-        if (!mentionFilter || '所有人'.includes(mentionFilter) || 'all'.includes(mentionFilter.toLowerCase())) {
+        if (!q || '所有人'.includes(q) || 'all'.includes(q) || 'suoyouren'.includes(q) || 'syr'.includes(q)) {
             return [allItem, ...filtered];
         }
         return filtered;
@@ -249,10 +257,18 @@ function AIChat() {
             if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) setContextMenu(null);
             else if (!contextMenuRef.current) setContextMenu(null);
             if (newMenuRef.current && !newMenuRef.current.contains(e.target as Node)) setShowNewMenu(false);
+
+            // Close @ mention popup if clicking outside textarea
+            if (showMentionPopup && textareaRef.current && !textareaRef.current.contains(e.target as Node)) {
+                // Ignore clicks on the popup itself
+                const popup = document.getElementById('mention-popup');
+                if (popup && popup.contains(e.target as Node)) return;
+                setShowMentionPopup(false);
+            }
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
-    }, []);
+    }, [showMentionPopup]);
 
     // Context Menu Handlers
     const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
@@ -426,13 +442,15 @@ function AIChat() {
                         return;
                     }
                 }
+                const customContact = (contacts || []).find(c => c.name === evt.data.name);
+
                 pendingProgressId = addTeamChatMessage(targetSessionId!, {
                     role: evt.data.role,
                     name: evt.data.name,
                     action: evt.data.action,
                     content: '',
-                    icon: getRole(evt.data.role)?.icon || '🤖',
-                    avatar: getRole(evt.data.role)?.avatar,
+                    icon: customContact?.icon || getRole(evt.data.role)?.icon || '🤖',
+                    avatar: customContact?.avatar || getRole(evt.data.role)?.avatar,
                     isProgress: true,
                 });
             } else if (evt.type === 'result') {
@@ -444,12 +462,13 @@ function AIChat() {
                     });
                     pendingProgressId = null;
                 } else {
+                    const customContact = (contacts || []).find(c => c.name === evt.data.name);
                     addTeamChatMessage(targetSessionId!, {
                         role: evt.data.role,
                         name: evt.data.name,
                         content: evt.data.content,
-                        icon: getRole(evt.data.role)?.icon || '🤖',
-                        avatar: getRole(evt.data.role)?.avatar,
+                        icon: customContact?.icon || getRole(evt.data.role)?.icon || '🤖',
+                        avatar: customContact?.avatar || getRole(evt.data.role)?.avatar,
                     });
                 }
             } else if (evt.type === 'group_start') {
@@ -472,8 +491,18 @@ function AIChat() {
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (showMentionPopup && mentionList.length > 0) {
-            if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIndex(i => (i + 1) % mentionList.length); return; }
-            if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIndex(i => (i - 1 + mentionList.length) % mentionList.length); return; }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setIsKeyboardSelecting(true);
+                setMentionIndex(i => (i + 1) % mentionList.length);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setIsKeyboardSelecting(true);
+                setMentionIndex(i => (i - 1 + mentionList.length) % mentionList.length);
+                return;
+            }
             if (e.key === 'Enter') { e.preventDefault(); insertMention(mentionList[mentionIndex]); return; }
             if (e.key === 'Escape') { e.preventDefault(); setShowMentionPopup(false); return; }
         }
@@ -1082,24 +1111,30 @@ function AIChat() {
 
                                     {/* @ Mention popup */}
                                     {showMentionPopup && mentionList.length > 0 && (
-                                        <div className="absolute bottom-full mb-1 left-4 right-4 bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50 max-h-[200px] overflow-y-auto">
-                                            <div className="px-3 py-1.5 text-[10px] text-gray-400 font-medium">@ 提及成员 (↑↓选择 Enter确认)</div>
-                                            {mentionList.map((c, idx) => (
-                                                <button
-                                                    key={c.id}
-                                                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${idx === mentionIndex ? 'bg-[#07c160]/10' : 'hover:bg-gray-50 dark:hover:bg-[#383838]'}`}
-                                                    onMouseDown={(e) => { e.preventDefault(); insertMention(c); }}
-                                                    onMouseEnter={() => setMentionIndex(idx)}
-                                                >
-                                                    <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 flex items-center justify-center" style={{ background: `${c.color}22` }}>
-                                                        {c.avatar ? <img src={c.avatar} alt="" className="w-full h-full object-cover" /> : <span className="text-sm">{c.icon}</span>}
-                                                    </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <span className={`text-[12px] ${idx === mentionIndex ? 'text-[#07c160] font-medium' : 'text-gray-700 dark:text-gray-300'}`}>{c.name}</span>
-                                                        <span className="text-[10px] text-gray-400 ml-2">{c.role}</span>
-                                                    </div>
-                                                </button>
-                                            ))}
+                                        <div
+                                            id="mention-popup"
+                                            className="absolute bottom-full mb-1 left-4 right-4 bg-white dark:bg-[#2e2e2e] rounded-lg shadow-xl border border-black/5 dark:border-white/10 py-1 z-50 max-h-[200px] overflow-y-auto"
+                                            onMouseMove={() => setIsKeyboardSelecting(false)}
+                                        >
+                                            <div className="px-3 py-1.5 text-[10px] text-gray-400 font-medium">@ 提及成员 (↑↓选择 Enter确认, Esc关闭)</div>
+                                            <div className={isKeyboardSelecting ? "pointer-events-none" : ""}>
+                                                {mentionList.map((c, idx) => (
+                                                    <button
+                                                        key={c.id}
+                                                        className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${idx === mentionIndex ? 'bg-[#07c160]/10' : 'hover:bg-gray-50 dark:hover:bg-[#383838]'}`}
+                                                        onMouseDown={(e) => { e.preventDefault(); insertMention(c); }}
+                                                        onMouseEnter={() => { if (!isKeyboardSelecting) setMentionIndex(idx) }}
+                                                    >
+                                                        <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 flex items-center justify-center" style={{ background: `${c.color || '#07c160'}22` }}>
+                                                            {c.avatar ? <img src={c.avatar} alt="" className="w-full h-full object-cover" /> : <span className="text-sm">{c.icon || '🤖'}</span>}
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <span className={`text-[12px] ${idx === mentionIndex ? 'text-[#07c160] font-medium' : 'text-gray-700 dark:text-gray-300'}`}>{c.name}</span>
+                                                            <span className="text-[10px] text-gray-400 ml-2">{c.role}</span>
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
                                     )}
 
