@@ -8,7 +8,7 @@ import { useDevOpsStore, AIProvider } from '../../stores/useDevOpsStore';
 import { invoke } from '@tauri-apps/api/core';
 import {
     MessageSquare, Settings as SettingsIcon,
-    Menu, Sparkles, Moon, Sun,
+    Menu, Sparkles, Moon, Sun, Book,
     Activity, Bot, Globe, FolderOpen, KeyRound, Palette, Blocks, Plug, Clock, Trash2, X,
     Radio, Save, Eye, EyeOff, RefreshCw, Edit2, ContactRound
 } from 'lucide-react';
@@ -139,6 +139,7 @@ function Layout() {
         { path: '/', icon: MessageSquare, label: t('nav.chat', '对话'), active: location.pathname === '/' },
         { path: '/contacts', icon: ContactRound, label: t('nav.contacts', '通讯录'), active: location.pathname === '/contacts' },
         { path: '/channels', icon: Radio, label: t('nav.channels_hub', '通道'), active: location.pathname === '/channels' },
+        { path: '/knowledge', icon: Book, label: t('nav.knowledge', '知识库'), active: location.pathname === '/knowledge' },
         { path: '/skills', icon: Blocks, label: t('nav.skills', '技能'), active: location.pathname === '/skills' },
         { path: '/mcp', icon: Plug, label: 'MCP', active: location.pathname === '/mcp' },
         { path: '/cron-jobs', icon: Clock, label: t('nav.cron_jobs', '定时任务'), active: location.pathname === '/cron-jobs' },

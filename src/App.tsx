@@ -12,6 +12,7 @@ import ThemeManager from './components/common/ThemeManager';
 import { useEffect } from 'react';
 import { useConfigStore } from './stores/useConfigStore';
 import { useTranslation } from 'react-i18next';
+import KnowledgeItems from './pages/KnowledgeItems';
 
 const router = createBrowserRouter([
   {
@@ -41,6 +42,10 @@ const router = createBrowserRouter([
       {
         path: 'channels',
         element: <Channels />,
+      },
+      {
+        path: 'knowledge',
+        element: <KnowledgeItems />,
       },
       {
         path: 'logs',
