@@ -5,7 +5,11 @@
 use agents_sdk::{
     persistence::InMemoryCheckpointer, state::AgentStateSnapshot, ConfigurableAgentBuilder,
     OpenAiChatModel, OpenAiConfig,
+    llm::{LanguageModel, LlmRequest, LlmResponse, ChunkStream},
+    messaging::{AgentMessage, ToolInvocation},
 };
+use async_trait::async_trait;
+use tracing::warn;
 
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -502,9 +506,13 @@ pub async fn agent_process_message(
         &ai.api_key
     };
     let oai_config = OpenAiConfig::new(api_key, &ai.model).with_api_url(Some(full_api_url));
-    let model = Arc::new(
+    let base_model = Arc::new(
         OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init failed: {}", e))?,
     );
+    let model = Arc::new(InterceptingChatModel {
+        inner: base_model,
+        limit: 131072, // Default Qwen context limit
+    });
 
     // 4. Build system prompt
     let system_prompt = build_system_prompt(&ai.system_prompt, workspace.as_deref());
@@ -663,6 +671,71 @@ pub async fn agent_process_message_with_images(
 /// Strip thinking tags and clean up response text.
 fn clean_response(text: &str) -> String {
     crate::modules::stream_events::clean_response(text)
+}
+
+// ============================================================================
+// Custom ChatModel Wrapper for Context Management
+// ============================================================================
+
+pub struct InterceptingChatModel {
+    pub inner: Arc<OpenAiChatModel>,
+    pub limit: usize,
+}
+
+#[async_trait]
+impl LanguageModel for InterceptingChatModel {
+    async fn generate(&self, request: LlmRequest) -> anyhow::Result<LlmResponse> {
+        let mut request = request;
+        let mut working_messages = crate::modules::agent::context_manager::mask_tool_outputs(&request.messages);
+
+        let status = crate::modules::agent::context_manager::check_overflow(&working_messages, self.limit);
+        
+        emit_agent_progress(
+            "loop_info",
+            json!({
+                "message": format!("[Context] Messages: {} | Tokens: ~{} | Usage: {}%", working_messages.len(), status.total_tokens, status.usage_percent)
+            }),
+        );
+
+        if !status.safe {
+            warn!("[ContextManager] Overflow Warning! Usage at {}%. Applying emergency trim.", status.usage_percent);
+            emit_agent_progress(
+                "progress",
+                json!({
+                    "role": "system",
+                    "name": "System",
+                    "action": format!("🚨 上下文即将溢出 ({}%)。正在执行紧急安全修剪...", status.usage_percent),
+                }),
+            );
+            crate::modules::agent::context_manager::emergency_trim(&mut working_messages);
+        }
+
+        request.messages = working_messages;
+        self.inner.generate(request).await
+    }
+
+    async fn generate_stream(&self, request: LlmRequest) -> anyhow::Result<ChunkStream> {
+        let mut request = request;
+        let mut working_messages = crate::modules::agent::context_manager::mask_tool_outputs(&request.messages);
+
+        let status = crate::modules::agent::context_manager::check_overflow(&working_messages, self.limit);
+
+        if !status.safe {
+            warn!("[ContextManager] Overflow Warning! Usage at {}%. Applying emergency trim.", status.usage_percent);
+            emit_agent_progress(
+                "progress",
+                json!({
+                    "role": "system",
+                    "name": "System",
+                    "action": format!("🚨 上下文即将溢出 ({}%)。正在执行紧急安全修剪...", status.usage_percent),
+                }),
+            );
+            crate::modules::agent::context_manager::emergency_trim(&mut working_messages);
+        }
+
+        request.messages = working_messages;
+        self.inner.generate_stream(request).await
+    }
 }
 
 // ============================================================================

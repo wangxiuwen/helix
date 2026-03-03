@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { ROLES, getRole } from './roles';
 import { LLMProvider } from './llm';
+import { maskToolOutputs, checkOverflow, compressChat } from './contextManager';
 
 export class TeamOrchestrator {
     private llm = new LLMProvider();
@@ -25,7 +26,8 @@ export class TeamOrchestrator {
 要求：
 1. 简洁有力，不废话，不要客套。
 2. 密切关注前面几位成员的发言，如果有不同意见或需要补充，请直接指出。
-3. 如果大家已经达成一致，请确认你的职责部分。`;
+3. 如果大家已经达成一致，请确认你的职责部分。
+4. 如果用户的发言是闲聊、玩笑或与已有项目无关的脑筋急转弯（如：大象装冰箱），请以你的角色性格自然、幽默地回应，切勿凭空捏造虚假的项目方案（如A方案/单体架构等废话）。`;
                         const res = await this.llm.chat([
                             { role: 'system', content: sysPrompt + (workspaceDir ? `\n\n相关目录: ${workspaceDir}` : '') },
                             { role: 'user', content: discussionContext }
@@ -83,6 +85,31 @@ export class TeamOrchestrator {
 
         while (rounds < 30) {
             rounds++;
+
+            // Context Manager Layer 1: Mask tool outputs before sending
+            this.history = maskToolOutputs(this.history);
+
+            // Context Manager Layer 2: Chat Compression (every 5 rounds)
+            if (rounds > 1 && rounds % 5 === 0) {
+                const compResult = await compressChat(this.history, this.llm);
+                if (compResult.compressed) {
+                    this.history = compResult.messages;
+                    onEvent({ type: 'progress', data: { role: 'pm', name: ROLES.pm.name, action: `[系统] 对话已成功压缩，节省上下文空间` } });
+                }
+            }
+
+            // Context Manager Layer 3: Overflow Prevention
+            const overflowCheck = checkOverflow(this.history, ROLES.pm.systemPrompt + workspaceContext);
+            onEvent({ type: 'loop_info', data: `[Loop ${rounds}] Messages: ${this.history.length} | Tokens: ~${overflowCheck.totalTokens} | Context: ${overflowCheck.usagePercent}%` });
+
+            if (!overflowCheck.safe) {
+                onEvent({ type: 'progress', data: { role: 'pm', name: '系统警报', action: `🚨 上下文已满 (${overflowCheck.usagePercent}%)。正在紧急阻断，请开启新对话...` } });
+
+                // Emergency trim as a last resort
+                this.history = this.history.slice(Math.floor(this.history.length * 0.7));
+                this.history.unshift({ role: 'assistant', content: '[Earlier context was truncated due to context window overflow]' });
+            }
+
             onEvent({ type: 'progress', data: { role: 'pm', name: ROLES.pm.name, action: `PM 思考中 (Round ${rounds})...` } });
 
             let msg;
@@ -153,7 +180,7 @@ export class TeamOrchestrator {
                             const subResult: any = await invoke('spawn_subagent', {
                                 task: args.task + (workspaceDir ? `\n\nIMPORTANT: Use this directory for ALL file outputs (create it if needed): ${workspaceDir}` : ''),
                                 systemPrompt: roleDef?.systemPrompt || `You are ${args.role}`,
-                                maxRounds: 30
+                                maxRounds: 10
                             });
                             resultStr = subResult.output;
                             onEvent({ type: 'result', data: { role: args.role, name: roleDef?.name, content: resultStr } });

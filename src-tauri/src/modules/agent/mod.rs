@@ -7,6 +7,7 @@ pub mod commands;
 pub mod memory;
 pub mod sandbox;
 pub mod plugins;
+pub mod context_manager;
 
 // Re-export core's public items so modules::agent::agent_chat still works
 pub use core::*;

@@ -42,9 +42,18 @@ pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, Stri
     let full_api_url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
     let oai_config = OpenAiConfig::new(&ai.api_key, &ai.model)
         .with_api_url(Some(full_api_url));
-    let model = Arc::new(
+    let base_model = Arc::new(
         OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init: {}", e))?
     );
+    let limit = if ai.model.contains("claude") || ai.model.contains("gpt-4-turbo") || ai.model.contains("gpt-4o") {
+        131072
+    } else {
+        32768
+    };
+    let model = Arc::new(crate::modules::agent::core::InterceptingChatModel {
+        inner: base_model,
+        limit,
+    });
 
     let base_prompt = params.system_prompt.unwrap_or_else(|| {
         "你是 Helix 的专属 Subagent (并发执行体)。\n\
