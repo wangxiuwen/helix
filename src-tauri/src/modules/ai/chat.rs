@@ -68,8 +68,18 @@ pub async fn team_chat_fetch(
                 crate::modules::ai::context::optimize_chat_history_values(msgs.clone(), 64000);
             *msgs = optimized;
         }
+        // CodingPlan endpoint returns 405 when tools are present.
+        // Strip tools so team chat falls back to text-only responses.
+        if url.contains("coding.dashscope.aliyuncs.com") {
+            if let Some(obj) = b.as_object_mut() {
+                obj.remove("tools");
+                obj.remove("tool_choice");
+            }
+        }
         req = req.json(&b);
     }
+
+    info!("[team_chat_fetch] {} {}", method, url);
 
     let resp = req
         .send()
@@ -82,6 +92,11 @@ pub async fn team_chat_fetch(
         .map_err(|e| format!("Read error: {}", e))?;
 
     if !status.is_success() {
+        error!(
+            "[team_chat_fetch] HTTP {} : {}",
+            status,
+            &text[..text.len().min(200)]
+        );
         return Err(format!("HTTP {} : {}", status, text));
     }
 
