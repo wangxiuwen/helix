@@ -3,10 +3,11 @@
 //! Uses ConfigurableAgentBuilder for the agent loop with custom tools.
 
 use agents_sdk::{
-    persistence::InMemoryCheckpointer, state::AgentStateSnapshot, ConfigurableAgentBuilder,
-    OpenAiChatModel, OpenAiConfig,
-    llm::{LanguageModel, LlmRequest, LlmResponse, ChunkStream},
+    llm::{ChunkStream, LanguageModel, LlmRequest, LlmResponse},
     messaging::{AgentMessage, ToolInvocation},
+    persistence::InMemoryCheckpointer,
+    state::AgentStateSnapshot,
+    ConfigurableAgentBuilder, OpenAiChatModel, OpenAiConfig,
 };
 use async_trait::async_trait;
 use tracing::warn;
@@ -498,6 +499,7 @@ pub async fn agent_process_message(
     } else {
         ai.base_url.clone()
     };
+
     let full_api_url = format!("{}/chat/completions", effective_base.trim_end_matches('/'));
 
     let api_key = if ai.api_key.is_empty() {
@@ -511,7 +513,7 @@ pub async fn agent_process_message(
     );
     let model = Arc::new(InterceptingChatModel {
         inner: base_model,
-        limit: 131072, // Default Qwen context limit
+        limit: 131072, // Default context limit
     });
 
     // 4. Build system prompt
@@ -550,25 +552,37 @@ pub async fn agent_process_message(
             parts.push(format!("## Previous Conversation Summary\n{}", summary));
         }
 
-        // Add recent history
+        // Add recent history with length limit (Antigravity Context Optimization)
         if history.len() > 1 {
-            let context: Vec<String> = history
-                .iter()
-                .rev()
-                .take(history.len().saturating_sub(1))
-                .map(|h| {
-                    format!(
-                        "**{}**: {}",
-                        if h.role == "user" {
-                            "User"
-                        } else {
-                            "Assistant"
-                        },
-                        h.content
-                    )
-                })
-                .collect();
-            parts.push(format!("## Recent History\n{}", context.join("\n\n")));
+            let mut context_lines = Vec::new();
+            let mut current_history_chars = 0;
+            let max_history_chars = 32000;
+
+            for h in history.iter().rev().take(history.len().saturating_sub(1)) {
+                let text = format!(
+                    "**{}**: {}",
+                    if h.role == "user" {
+                        "User"
+                    } else {
+                        "Assistant"
+                    },
+                    h.content
+                );
+
+                if current_history_chars + text.len() > max_history_chars {
+                    context_lines.push(
+                        "**(System)**: ... [较早的历史记录已根据上下文容量限制被自动折叠] ..."
+                            .to_string(),
+                    );
+                    break;
+                }
+
+                current_history_chars += text.len();
+                context_lines.push(text);
+            }
+
+            context_lines.reverse();
+            parts.push(format!("## Recent History\n{}", context_lines.join("\n\n")));
         }
 
         parts.push(format!("---\n**User**: {}", user_input));
@@ -678,7 +692,7 @@ fn clean_response(text: &str) -> String {
 // ============================================================================
 
 pub struct InterceptingChatModel {
-    pub inner: Arc<OpenAiChatModel>,
+    pub inner: Arc<dyn LanguageModel>,
     pub limit: usize,
 }
 
@@ -686,10 +700,12 @@ pub struct InterceptingChatModel {
 impl LanguageModel for InterceptingChatModel {
     async fn generate(&self, request: LlmRequest) -> anyhow::Result<LlmResponse> {
         let mut request = request;
-        let mut working_messages = crate::modules::agent::context_manager::mask_tool_outputs(&request.messages);
+        let mut working_messages =
+            crate::modules::agent::context_manager::mask_tool_outputs(&request.messages);
 
-        let status = crate::modules::agent::context_manager::check_overflow(&working_messages, self.limit);
-        
+        let status =
+            crate::modules::agent::context_manager::check_overflow(&working_messages, self.limit);
+
         emit_agent_progress(
             "loop_info",
             json!({
@@ -698,7 +714,10 @@ impl LanguageModel for InterceptingChatModel {
         );
 
         if !status.safe {
-            warn!("[ContextManager] Overflow Warning! Usage at {}%. Applying emergency trim.", status.usage_percent);
+            warn!(
+                "[ContextManager] Overflow Warning! Usage at {}%. Applying emergency trim.",
+                status.usage_percent
+            );
             emit_agent_progress(
                 "progress",
                 json!({
@@ -716,12 +735,17 @@ impl LanguageModel for InterceptingChatModel {
 
     async fn generate_stream(&self, request: LlmRequest) -> anyhow::Result<ChunkStream> {
         let mut request = request;
-        let mut working_messages = crate::modules::agent::context_manager::mask_tool_outputs(&request.messages);
+        let mut working_messages =
+            crate::modules::agent::context_manager::mask_tool_outputs(&request.messages);
 
-        let status = crate::modules::agent::context_manager::check_overflow(&working_messages, self.limit);
+        let status =
+            crate::modules::agent::context_manager::check_overflow(&working_messages, self.limit);
 
         if !status.safe {
-            warn!("[ContextManager] Overflow Warning! Usage at {}%. Applying emergency trim.", status.usage_percent);
+            warn!(
+                "[ContextManager] Overflow Warning! Usage at {}%. Applying emergency trim.",
+                status.usage_percent
+            );
             emit_agent_progress(
                 "progress",
                 json!({

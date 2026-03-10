@@ -55,8 +55,8 @@ pub struct ResolvedAuth {
 
 /// Model prefix → provider known patterns.
 const OPENAI_PREFIXES: &[&str] = &[
-    "gpt-", "o1-", "o3-", "o4-", "chatgpt-", "text-", "dall-e",
-    "tts-", "whisper", "davinci", "curie", "babbage", "ada",
+    "gpt-", "o1-", "o3-", "o4-", "chatgpt-", "text-", "dall-e", "tts-", "whisper", "davinci",
+    "curie", "babbage", "ada",
 ];
 const ANTHROPIC_PREFIXES: &[&str] = &["claude-"];
 const GOOGLE_PREFIXES: &[&str] = &["gemini-", "gemma-"];
@@ -92,30 +92,16 @@ pub fn detect_provider(model: &str) -> ProviderKind {
 /// Environment variable names per provider.
 fn env_var_names(kind: &ProviderKind) -> Vec<&'static str> {
     match kind {
-        ProviderKind::OpenAI => vec![
-            "OPENAI_API_KEY",
-            "OPENAI_KEY",
-            "AZURE_OPENAI_API_KEY",
-        ],
-        ProviderKind::Anthropic => vec![
-            "ANTHROPIC_API_KEY",
-            "CLAUDE_API_KEY",
-        ],
-        ProviderKind::Google => vec![
-            "GEMINI_API_KEY",
-            "GOOGLE_AI_KEY",
-            "GOOGLE_API_KEY",
-        ],
+        ProviderKind::OpenAI => vec!["OPENAI_API_KEY", "OPENAI_KEY", "AZURE_OPENAI_API_KEY"],
+        ProviderKind::Anthropic => vec!["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+        ProviderKind::Google => vec!["GEMINI_API_KEY", "GOOGLE_AI_KEY", "GOOGLE_API_KEY"],
         ProviderKind::Ollama => vec![], // Ollama doesn't need API key
         ProviderKind::Custom => vec![],
     }
 }
 
 /// Resolve API key: config > env vars.
-pub fn resolve_api_key(
-    kind: &ProviderKind,
-    config_key: Option<&str>,
-) -> ResolvedAuth {
+pub fn resolve_api_key(kind: &ProviderKind, config_key: Option<&str>) -> ResolvedAuth {
     // 1. Config has priority
     if let Some(key) = config_key {
         if !key.is_empty() {
@@ -272,13 +258,16 @@ pub fn build_anthropic_request(
     if let Some(tools) = tools {
         if !tools.is_empty() {
             // Anthropic uses a different tool format
-            let anthropic_tools: Vec<Value> = tools.iter().map(|t| {
-                json!({
-                    "name": t["function"]["name"],
-                    "description": t["function"]["description"],
-                    "input_schema": t["function"]["parameters"],
+            let anthropic_tools: Vec<Value> = tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "name": t["function"]["name"],
+                        "description": t["function"]["description"],
+                        "input_schema": t["function"]["parameters"],
+                    })
                 })
-            }).collect();
+                .collect();
             body["tools"] = json!(anthropic_tools);
         }
     }
@@ -314,7 +303,8 @@ pub fn build_ollama_request(
 
 /// Get the chat completion endpoint URL for a provider.
 pub fn chat_completion_url(config: &ProviderConfig) -> String {
-    let base = config.base_url.trim_end_matches('/');
+    let sanitized = super::chat::sanitize_base_url(&config.base_url);
+    let base = sanitized.trim_end_matches('/');
     match config.kind {
         ProviderKind::OpenAI | ProviderKind::Custom => {
             format!("{}/chat/completions", base)

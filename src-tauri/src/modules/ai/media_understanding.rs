@@ -3,10 +3,10 @@
 //! Ported from OpenClaw `src/media-understanding/`: detects media in messages,
 //! sends images to vision models, transcribes audio, and inlines text file content.
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
-use base64::Engine as _;
 
 // ============================================================================
 // Types
@@ -33,10 +33,18 @@ pub struct MediaUnderstandingResult {
 
 /// Known text-like MIME types that should be inlined.
 const TEXT_MIMES: &[&str] = &[
-    "text/plain", "text/csv", "text/html", "text/xml", "text/yaml",
-    "application/json", "application/xml", "application/yaml",
-    "application/javascript", "application/typescript",
-    "application/x-sh", "application/x-python",
+    "text/plain",
+    "text/csv",
+    "text/html",
+    "text/xml",
+    "text/yaml",
+    "application/json",
+    "application/xml",
+    "application/yaml",
+    "application/javascript",
+    "application/typescript",
+    "application/x-sh",
+    "application/x-python",
 ];
 
 /// Detect MIME type from file extension.
@@ -87,12 +95,18 @@ pub fn detect_mime(path: &str) -> String {
 
 /// Check if a MIME type is a text-like file that can be inlined.
 pub fn is_text_mime(mime: &str) -> bool {
-    mime.starts_with("text/") || TEXT_MIMES.contains(&mime)
-        || mime.contains("json") || mime.contains("xml")
-        || mime.contains("yaml") || mime.contains("javascript")
-        || mime.contains("typescript") || mime.contains("python")
-        || mime.contains("sh") || mime.contains("sql")
-        || mime.contains("toml") || mime.contains("rust")
+    mime.starts_with("text/")
+        || TEXT_MIMES.contains(&mime)
+        || mime.contains("json")
+        || mime.contains("xml")
+        || mime.contains("yaml")
+        || mime.contains("javascript")
+        || mime.contains("typescript")
+        || mime.contains("python")
+        || mime.contains("sh")
+        || mime.contains("sql")
+        || mime.contains("toml")
+        || mime.contains("rust")
 }
 
 /// Check if a MIME type is an image.
@@ -149,7 +163,11 @@ pub fn extract_file_content(path: &str, max_chars: usize) -> MediaResult {
         return MediaResult {
             media_type: "text_file".into(),
             source: path.into(),
-            description: format!("[文件过大: {} bytes, 上限: {} bytes]", meta.len(), MAX_INLINE_SIZE),
+            description: format!(
+                "[文件过大: {} bytes, 上限: {} bytes]",
+                meta.len(),
+                MAX_INLINE_SIZE
+            ),
             content_length: meta.len() as usize,
             error: Some("File too large for inline".into()),
         };
@@ -169,13 +187,23 @@ pub fn extract_file_content(path: &str, max_chars: usize) -> MediaResult {
         Ok(content) => {
             let total_len = content.len();
             let truncated = if content.len() > max_chars {
-                format!("{}...\n[截断，共 {} 字符]", &content[..max_chars], total_len)
+                format!(
+                    "{}...\n[截断，共 {} 字符]",
+                    &content[..max_chars],
+                    total_len
+                )
             } else {
                 content
             };
 
-            let filename = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-            let description = format!("<file name=\"{}\" type=\"{}\">\n{}\n</file>", filename, mime, truncated);
+            let filename = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+            let description = format!(
+                "<file name=\"{}\" type=\"{}\">\n{}\n</file>",
+                filename, mime, truncated
+            );
 
             MediaResult {
                 media_type: "text_file".into(),
@@ -254,7 +282,8 @@ pub async fn describe_image(image_path: &str) -> MediaResult {
         };
     }
 
-    let url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
+    let base = crate::modules::ai::chat::sanitize_base_url(&ai.base_url);
+    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -381,7 +410,10 @@ pub async fn transcribe_audio(audio_path: &str) -> MediaResult {
     }
 
     let url = format!("{}/audio/transcriptions", ai.base_url.trim_end_matches('/'));
-    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("audio.mp3");
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("audio.mp3");
 
     let file_part = reqwest::multipart::Part::bytes(audio_data.clone())
         .file_name(filename.to_string())
@@ -457,7 +489,10 @@ pub async fn media_detect_mime(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn media_extract_file(path: String, max_chars: Option<usize>) -> Result<MediaResult, String> {
+pub async fn media_extract_file(
+    path: String,
+    max_chars: Option<usize>,
+) -> Result<MediaResult, String> {
     Ok(extract_file_content(&path, max_chars.unwrap_or(10000)))
 }
 

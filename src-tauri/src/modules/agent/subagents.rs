@@ -2,7 +2,9 @@
 //!
 //! Allows the main agent to spawn isolated, parallel AI tasks.
 
-use agents_sdk::{ConfigurableAgentBuilder, OpenAiConfig, OpenAiChatModel, persistence::InMemoryCheckpointer};
+use agents_sdk::{
+    persistence::InMemoryCheckpointer, ConfigurableAgentBuilder, OpenAiChatModel, OpenAiConfig,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -34,18 +36,23 @@ pub struct SubagentResult {
 // ============================================================================
 
 pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, String> {
-    info!("Starting subagent task: {:?}", &params.task[..params.task.len().min(50)]);
+    info!(
+        "Starting subagent task: {:?}",
+        &params.task[..params.task.len().min(50)]
+    );
 
     let config = load_app_config().map_err(|e| format!("config error: {}", e))?;
     let ai = config.ai_config;
 
-    let full_api_url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
-    let oai_config = OpenAiConfig::new(&ai.api_key, &ai.model)
-        .with_api_url(Some(full_api_url));
-    let base_model = Arc::new(
-        OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init: {}", e))?
-    );
-    let limit = if ai.model.contains("claude") || ai.model.contains("gpt-4-turbo") || ai.model.contains("gpt-4o") {
+    let base = crate::modules::ai::chat::sanitize_base_url(&ai.base_url);
+    let full_api_url = format!("{}/chat/completions", base.trim_end_matches('/'));
+    let oai_config = OpenAiConfig::new(&ai.api_key, &ai.model).with_api_url(Some(full_api_url));
+    let base_model =
+        Arc::new(OpenAiChatModel::new(oai_config).map_err(|e| format!("Model init: {}", e))?);
+    let limit = if ai.model.contains("claude")
+        || ai.model.contains("gpt-4-turbo")
+        || ai.model.contains("gpt-4o")
+    {
         131072
     } else {
         32768
@@ -61,7 +68,8 @@ pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, Stri
          **规则：**\n\
          1. 完整查验：使用提供的工具执行你的任务。如果遇到错误，尝试修复。\n\
          2. 结果导向：一旦你获得了任务所需的最终答案或完成了操作，立即在回复中详细阐述结果。\n\
-         3. 如果前置 context 中已经包含了所需信息，你可以直接使用，无需重复调用工具。".to_string()
+         3. 如果前置 context 中已经包含了所需信息，你可以直接使用，无需重复调用工具。"
+            .to_string()
     });
 
     let system_prompt = if let Some(ctx) = params.context {
@@ -84,7 +92,7 @@ pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, Stri
     let state = Arc::new(agents_sdk::state::AgentStateSnapshot::default());
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        agent.handle_message(&params.task, state)
+        agent.handle_message(&params.task, state),
     )
     .await
     .map_err(|_| "Subagent execution timed out after 2 minutes".to_string())?
@@ -97,12 +105,14 @@ pub async fn run_subagent(params: SubagentParams) -> Result<SubagentResult, Stri
 
     Ok(SubagentResult {
         output,
-        rounds_used: 1,  // SDK handles rounds internally
-        tokens_used: 0,   // SDK doesn't expose token count yet
+        rounds_used: 1, // SDK handles rounds internally
+        tokens_used: 0, // SDK doesn't expose token count yet
     })
 }
 
-pub async fn run_subagents_batch(tasks: Vec<SubagentParams>) -> Result<Vec<Result<SubagentResult, String>>, String> {
+pub async fn run_subagents_batch(
+    tasks: Vec<SubagentParams>,
+) -> Result<Vec<Result<SubagentResult, String>>, String> {
     info!("Spawning {} concurrent subagents", tasks.len());
 
     let mut handles = vec![];
@@ -128,20 +138,36 @@ pub async fn run_subagents_batch(tasks: Vec<SubagentParams>) -> Result<Vec<Resul
 // ============================================================================
 
 #[tauri::command]
-pub async fn spawn_subagent(task: String, context: Option<String>, system_prompt: Option<String>, max_rounds: Option<u32>) -> Result<SubagentResult, String> {
-    run_subagent(SubagentParams { task, context, system_prompt, max_rounds }).await
+pub async fn spawn_subagent(
+    task: String,
+    context: Option<String>,
+    system_prompt: Option<String>,
+    max_rounds: Option<u32>,
+) -> Result<SubagentResult, String> {
+    run_subagent(SubagentParams {
+        task,
+        context,
+        system_prompt,
+        max_rounds,
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn spawn_subagents_batch(tasks: Vec<SubagentParams>) -> Result<Vec<SubagentResult>, String> {
+pub async fn spawn_subagents_batch(
+    tasks: Vec<SubagentParams>,
+) -> Result<Vec<SubagentResult>, String> {
     let results = run_subagents_batch(tasks).await?;
-    let flattened = results.into_iter().map(|r| match r {
-        Ok(res) => res,
-        Err(e) => SubagentResult {
-            output: format!("Subagent Failed: {}", e),
-            rounds_used: 0,
-            tokens_used: 0,
-        }
-    }).collect();
+    let flattened = results
+        .into_iter()
+        .map(|r| match r {
+            Ok(res) => res,
+            Err(e) => SubagentResult {
+                output: format!("Subagent Failed: {}", e),
+                rounds_used: 0,
+                tokens_used: 0,
+            },
+        })
+        .collect();
     Ok(flattened)
 }

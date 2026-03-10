@@ -130,7 +130,12 @@ pub fn init_memory_tables() -> Result<(), String> {
 // CRUD
 // ============================================================================
 
-pub fn store_memory(key: &str, content: &str, source: &str, tags: &[String]) -> Result<MemoryEntry, String> {
+pub fn store_memory(
+    key: &str,
+    content: &str,
+    source: &str,
+    tags: &[String],
+) -> Result<MemoryEntry, String> {
     let now = chrono::Utc::now().to_rfc3339();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
 
@@ -357,7 +362,11 @@ pub fn search_hybrid(query: &str, limit: i64) -> Result<Vec<MemorySearchResult>,
     }
 
     // 4. Re-sort by adjusted score
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok(results)
 }
@@ -399,10 +408,16 @@ pub async fn generate_embedding(text: &str) -> Result<Vec<f32>, String> {
 
     if !resp.status().is_success() {
         let err = resp.text().await.unwrap_or_default();
-        return Err(format!("embedding API error: {}", &err[..err.len().min(200)]));
+        return Err(format!(
+            "embedding API error: {}",
+            &err[..err.len().min(200)]
+        ));
     }
 
-    let data: Value = resp.json().await.map_err(|e| format!("parse embedding: {}", e))?;
+    let data: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse embedding: {}", e))?;
     let embedding = data["data"][0]["embedding"]
         .as_array()
         .ok_or("No embedding in response")?
@@ -443,11 +458,18 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         norm_b += b[i] * b[i];
     }
     let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom == 0.0 { 0.0 } else { dot / denom }
+    if denom == 0.0 {
+        0.0
+    } else {
+        dot / denom
+    }
 }
 
 /// Vector search: find memories most similar to a query embedding.
-pub fn search_vector(query_embedding: &[f32], limit: i64) -> Result<Vec<MemorySearchResult>, String> {
+pub fn search_vector(
+    query_embedding: &[f32],
+    limit: i64,
+) -> Result<Vec<MemorySearchResult>, String> {
     let conn = MEMORY_DB.lock();
 
     let mut stmt = conn
@@ -493,7 +515,11 @@ pub fn search_vector(query_embedding: &[f32], limit: i64) -> Result<Vec<MemorySe
         .map_err(|e| format!("vector collect: {}", e))?;
 
     // Sort by similarity descending
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(limit as usize);
 
     Ok(scored)
@@ -519,7 +545,9 @@ pub fn get_memory_stats() -> Result<MemoryStats, String> {
         .unwrap_or(0);
 
     let mut sources: HashMap<String, i64> = HashMap::new();
-    if let Ok(mut stmt) = conn.prepare("SELECT source, COUNT(*) FROM memory_entries GROUP BY source") {
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT source, COUNT(*) FROM memory_entries GROUP BY source")
+    {
         if let Ok(rows) = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         }) {
@@ -529,7 +557,9 @@ pub fn get_memory_stats() -> Result<MemoryStats, String> {
         }
     }
 
-    let db_path = get_data_dir().map(|d| d.join("helix.db")).unwrap_or_default();
+    let db_path = get_data_dir()
+        .map(|d| d.join("helix.db"))
+        .unwrap_or_default();
     let db_size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
 
     Ok(MemoryStats {
@@ -545,7 +575,11 @@ pub fn get_memory_stats() -> Result<MemoryStats, String> {
 // ============================================================================
 
 /// Save a conversation exchange as a memory entry for future retrieval.
-pub fn save_conversation_memory(account_id: &str, user_msg: &str, assistant_msg: &str) -> Result<(), String> {
+pub fn save_conversation_memory(
+    account_id: &str,
+    user_msg: &str,
+    assistant_msg: &str,
+) -> Result<(), String> {
     // Generate a meaningful key from the user message
     let key = format!(
         "conv:{}_{}",
@@ -565,13 +599,26 @@ pub fn save_conversation_memory(account_id: &str, user_msg: &str, assistant_msg:
 // ============================================================================
 
 #[tauri::command]
-pub async fn memory_search(query: String, limit: Option<i64>) -> Result<Vec<MemorySearchResult>, String> {
+pub async fn memory_search(
+    query: String,
+    limit: Option<i64>,
+) -> Result<Vec<MemorySearchResult>, String> {
     search_hybrid(&query, limit.unwrap_or(20))
 }
 
 #[tauri::command]
-pub async fn memory_store_entry(key: String, content: String, source: Option<String>, tags: Option<Vec<String>>) -> Result<MemoryEntry, String> {
-    store_memory(&key, &content, &source.unwrap_or_else(|| "user".to_string()), &tags.unwrap_or_default())
+pub async fn memory_store_entry(
+    key: String,
+    content: String,
+    source: Option<String>,
+    tags: Option<Vec<String>>,
+) -> Result<MemoryEntry, String> {
+    store_memory(
+        &key,
+        &content,
+        &source.unwrap_or_else(|| "user".to_string()),
+        &tags.unwrap_or_default(),
+    )
 }
 
 #[tauri::command]
@@ -580,7 +627,10 @@ pub async fn memory_delete(id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn memory_list(source: Option<String>, limit: Option<i64>) -> Result<Vec<MemoryEntry>, String> {
+pub async fn memory_list(
+    source: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<MemoryEntry>, String> {
     list_memories(source.as_deref(), limit.unwrap_or(50))
 }
 
@@ -593,17 +643,29 @@ pub async fn memory_stats() -> Result<MemoryStats, String> {
 pub async fn memory_embed(entry_id: i64) -> Result<String, String> {
     let content = {
         let conn = MEMORY_DB.lock();
-        conn.query_row("SELECT content FROM memory_entries WHERE id = ?1", params![entry_id], |r| r.get::<_, String>(0))
-            .map_err(|e| format!("find entry: {}", e))?
+        conn.query_row(
+            "SELECT content FROM memory_entries WHERE id = ?1",
+            params![entry_id],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(|e| format!("find entry: {}", e))?
     };
 
     let embedding = generate_embedding(&content).await?;
     store_embedding(entry_id, &embedding)?;
-    Ok(format!("Embedded {} dimensions for entry {}", embedding.len(), entry_id))
+    Ok(format!(
+        "Embedded {} dimensions for entry {}",
+        embedding.len(),
+        entry_id
+    ))
 }
 
 #[tauri::command]
-pub async fn memory_save_conversation(account_id: String, user_msg: String, assistant_msg: String) -> Result<(), String> {
+pub async fn memory_save_conversation(
+    account_id: String,
+    user_msg: String,
+    assistant_msg: String,
+) -> Result<(), String> {
     save_conversation_memory(&account_id, &user_msg, &assistant_msg)
 }
 
@@ -646,7 +708,7 @@ pub fn flush_memories_to_file(days_back: i64) -> Result<String, String> {
             .map_err(|e| format!("flush map: {}", e))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("flush collect: {}", e))?;
-            
+
         res
     }; // conn dropped here
 
@@ -674,7 +736,11 @@ pub fn flush_memories_to_file(days_back: i64) -> Result<String, String> {
     file.write_all(content.as_bytes())
         .map_err(|e| format!("write memory file: {}", e))?;
 
-    let msg = format!("Flushed {} memories to {}", entries.len(), file_path.display());
+    let msg = format!(
+        "Flushed {} memories to {}",
+        entries.len(),
+        file_path.display()
+    );
     info!("{}", msg);
     Ok(msg)
 }
@@ -693,7 +759,11 @@ pub fn list_memory_files() -> Result<Vec<String>, String> {
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.ends_with(".md") { Some(name) } else { None }
+            if name.ends_with(".md") {
+                Some(name)
+            } else {
+                None
+            }
         })
         .collect();
 
@@ -730,7 +800,7 @@ pub fn get_compressed_summary(account_id: &str) -> Option<String> {
             account_id TEXT PRIMARY KEY,
             summary TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        );"
+        );",
     );
     conn.query_row(
         "SELECT summary FROM conversation_summaries WHERE account_id = ?1",
@@ -749,7 +819,7 @@ pub fn save_compressed_summary(account_id: &str, summary: &str) -> Result<(), St
             account_id TEXT PRIMARY KEY,
             summary TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        );"
+        );",
     );
     conn.execute(
         "INSERT OR REPLACE INTO conversation_summaries (account_id, summary, updated_at)
@@ -762,9 +832,14 @@ pub fn save_compressed_summary(account_id: &str, summary: &str) -> Result<(), St
 
 /// Check if conversation history needs compaction and return
 /// (needs_compaction, total_chars, history_len).
-pub fn check_compaction_needed(history: &[crate::modules::database::ConversationEntry]) -> (bool, usize) {
+pub fn check_compaction_needed(
+    history: &[crate::modules::database::ConversationEntry],
+) -> (bool, usize) {
     let total_chars: usize = history.iter().map(|h| h.content.len()).sum();
-    (total_chars > COMPACTION_CHAR_THRESHOLD && history.len() > COMPACTION_KEEP_RECENT, total_chars)
+    (
+        total_chars > COMPACTION_CHAR_THRESHOLD && history.len() > COMPACTION_KEEP_RECENT,
+        total_chars,
+    )
 }
 
 /// Build the compaction prompt: ask LLM to summarize older messages.
@@ -781,12 +856,20 @@ pub fn build_compaction_prompt(
         ));
     }
 
-    prompt.push_str("Please summarize the following conversation into a concise but comprehensive summary. ");
-    prompt.push_str("Preserve key decisions, facts, user preferences, technical details, and action items. ");
+    prompt.push_str(
+        "Please summarize the following conversation into a concise but comprehensive summary. ",
+    );
+    prompt.push_str(
+        "Preserve key decisions, facts, user preferences, technical details, and action items. ",
+    );
     prompt.push_str("Write the summary in the same language as the conversation.\n\n");
 
     for msg in messages_to_compact {
-        let role = if msg.role == "user" { "User" } else { "Assistant" };
+        let role = if msg.role == "user" {
+            "User"
+        } else {
+            "Assistant"
+        };
         // Truncate very long messages to avoid exceeding context
         let content = if msg.content.len() > 2000 {
             format!("{}...[truncated]", &msg.content[..2000])
@@ -802,9 +885,7 @@ pub fn build_compaction_prompt(
 
 /// Compact conversation history: summarize old messages and save the summary.
 /// Returns the number of messages compacted.
-pub async fn compact_conversation_history(
-    account_id: &str,
-) -> Result<usize, String> {
+pub async fn compact_conversation_history(account_id: &str) -> Result<usize, String> {
     let history = crate::modules::database::get_conversation_history(account_id, 200)?;
 
     let (needs_compaction, total_chars) = check_compaction_needed(&history);
@@ -814,7 +895,9 @@ pub async fn compact_conversation_history(
 
     info!(
         "[memory] Compaction triggered for {}: {} chars, {} messages",
-        account_id, total_chars, history.len()
+        account_id,
+        total_chars,
+        history.len()
     );
 
     // Split: keep recent N messages, compact the rest
@@ -830,14 +913,14 @@ pub async fn compact_conversation_history(
     let prompt = build_compaction_prompt(messages_to_compact, previous_summary.as_deref());
 
     // Call LLM to generate summary
-    let config = crate::modules::config::load_app_config()
-        .map_err(|e| format!("config: {}", e))?;
+    let config = crate::modules::config::load_app_config().map_err(|e| format!("config: {}", e))?;
     let ai = &config.ai_config;
     if ai.api_key.is_empty() {
         return Err("API key not configured for compaction".to_string());
     }
 
-    let url = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
+    let base = crate::modules::ai::chat::sanitize_base_url(&ai.base_url);
+    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
     let body = json!({
         "model": ai.model,
         "messages": [
@@ -863,7 +946,10 @@ pub async fn compact_conversation_history(
 
     if !resp.status().is_success() {
         let err = resp.text().await.unwrap_or_default();
-        return Err(format!("compaction API error: {}", &err[..err.len().min(300)]));
+        return Err(format!(
+            "compaction API error: {}",
+            &err[..err.len().min(300)]
+        ));
     }
 
     let data: Value = resp.json().await.map_err(|e| format!("parse: {}", e))?;
@@ -881,7 +967,9 @@ pub async fn compact_conversation_history(
 
     info!(
         "[memory] Compacted {} messages for {} (summary: {} chars)",
-        compacted_count, account_id, summary.len()
+        compacted_count,
+        account_id,
+        summary.len()
     );
 
     Ok(compacted_count)

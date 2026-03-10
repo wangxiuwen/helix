@@ -73,29 +73,47 @@ const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 380;
 
 // Window-level event buffer for agent progress (survives unmount, HMR, StrictMode)
+// --- Agent Progress Types ---
+interface AgentStep {
+    type: 'thinking' | 'tool_call' | 'tool_result' | 'loop_info';
+    name?: string;
+    icon?: string;
+    detail?: string;
+    chars?: number;
+    elapsed_ms?: number;
+    message?: string; // for loop_info
+    ts: number; // timestamp
+}
+
 declare global {
     interface Window {
-        __helix_agent_status: string[];
+        __helix_agent_steps: AgentStep[];
         __helix_listeners_registered?: boolean;
     }
 }
-if (!window.__helix_agent_status) window.__helix_agent_status = [];
+if (!window.__helix_agent_steps) window.__helix_agent_steps = [];
+
+const TOOL_ICONS: Record<string, string> = {
+    terminal: '⚡', file: '📄', edit: '✏️', globe: '🌐', search: '🔍',
+    folder: '📁', brain: '🧠', cpu: '💻', camera: '📸', default: '🔧',
+};
 
 if (!window.__helix_listeners_registered) {
     window.__helix_listeners_registered = true;
     import('@tauri-apps/api/event').then(({ listen }) => {
         listen('agent-progress', (event: any) => {
             const { type, data } = event.payload;
+            const ts = Date.now();
             if (type === 'thinking') {
-                const msg = i18n.t('chat.thinking', { model: data.model, defaultValue: `🤔 思考中... (模型: ${data.model})` });
-                const arr = window.__helix_agent_status;
-                if (arr[arr.length - 1] !== msg) arr.push(msg);
+                window.__helix_agent_steps.push({ type: 'thinking', detail: data.model, ts });
             } else if (type === 'tool_call') {
-                window.__helix_agent_status.push(i18n.t('chat.tool_calling', { name: data.name, defaultValue: `🔧 调用工具: ${data.name}` }));
+                window.__helix_agent_steps.push({ type: 'tool_call', name: data.name, icon: data.icon, detail: data.detail, ts });
             } else if (type === 'tool_result') {
-                window.__helix_agent_status.push(i18n.t('chat.tool_done', { name: data.name, chars: data.chars, defaultValue: `✅ ${data.name} 完成 (${data.chars} 字符)` }));
+                window.__helix_agent_steps.push({ type: 'tool_result', name: data.name, icon: data.icon, detail: data.detail, chars: data.chars, elapsed_ms: data.elapsed_ms, ts });
+            } else if (type === 'loop_info') {
+                window.__helix_agent_steps.push({ type: 'loop_info', message: data.message, ts });
             } else if (type === 'done' || type === 'cancelled') {
-                window.__helix_agent_status = [];
+                window.__helix_agent_steps = [];
             }
             window.dispatchEvent(new Event('helix:update'));
         });
@@ -162,7 +180,7 @@ function AIChat() {
         : fetchedModels.length > 0 ? fetchedModels : (currentModel ? [currentModel] : []);
 
     // Agent progress — sync from window-level buffer
-    const [agentStatus, setAgentStatus] = useState<string[]>(() => [...window.__helix_agent_status]);
+    const [agentSteps, setAgentSteps] = useState<AgentStep[]>(() => [...window.__helix_agent_steps]);
 
     // Avatar Picker State
     const [showAvatarPicker, setShowAvatarPicker] = useState(false);
@@ -221,18 +239,18 @@ function AIChat() {
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [activeSession?.messages, agentStatus]);
+    }, [activeSession?.messages, agentSteps]);
 
     // Clear agent status when switching conversations
     useEffect(() => {
-        window.__helix_agent_status = [];
-        setAgentStatus([]);
+        window.__helix_agent_steps = [];
+        setAgentSteps([]);
     }, [activeChatId]);
 
     // Sync agent status from window buffer on mount and on every update event
     useEffect(() => {
         const sync = () => {
-            setAgentStatus([...window.__helix_agent_status]);
+            setAgentSteps([...window.__helix_agent_steps]);
         };
         sync();
         window.addEventListener('helix:update', sync);
@@ -377,7 +395,7 @@ function AIChat() {
         // Single chats block concurrent sending while agent is running
         if (isSessionLoading) return;
 
-        setAgentStatus([]);
+        setAgentSteps([]);
         const msg = input.trim();
         const imgs = [...pendingImages];
         setInput('');
@@ -939,7 +957,7 @@ function AIChat() {
                                                                 )}
                                                                 {msg.content !== '(图片)' && (() => {
                                                                     // Parse __FILE_ATTACHMENT__ markers out of message content
-                                                                    const parts = msg.content.split(/(__FILE_ATTACHMENT__\{.*?\}(?=__|$))/s);
+                                                                    const parts = msg.content?.split(/(__FILE_ATTACHMENT__\{.*?\}(?=__|$))/s) || [];
                                                                     return parts.map((part, i) => {
                                                                         if (part.startsWith('__FILE_ATTACHMENT__')) {
                                                                             try {
@@ -1158,15 +1176,43 @@ function AIChat() {
                                                 )}
                                             </div>
                                             <div className="bg-white dark:bg-[#2c2c2c] rounded-xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[65%]">
-                                                {agentStatus.length > 0 ? (
-                                                    <details ref={el => { if (el && !el.hasAttribute('data-init')) { el.setAttribute('data-init', '1'); el.open = true; } }} className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                                                        <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300">
-                                                            {agentStatus[agentStatus.length - 1]}
-                                                            <span className="loading loading-dots loading-xs text-gray-400 ml-1" />
+                                                {agentSteps.length > 0 ? (
+                                                    <details ref={el => { if (el && !el.hasAttribute('data-init')) { el.setAttribute('data-init', '1'); el.open = true; } }} className="text-xs text-gray-500 dark:text-gray-400 font-mono w-full max-w-[420px]">
+                                                        <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1.5">
+                                                            {(() => {
+                                                                const last = agentSteps[agentSteps.length - 1];
+                                                                if (last.type === 'thinking') return <><span>🤔</span><span>思考中... ({last.detail})</span></>;
+                                                                if (last.type === 'tool_call') return <><span>{TOOL_ICONS[last.icon || 'default']}</span><span>{last.name}</span><span className="text-gray-400 truncate max-w-[200px]">{last.detail}</span></>;
+                                                                if (last.type === 'tool_result') return <><span>✅</span><span>{last.name}</span><span className="text-emerald-500">{last.elapsed_ms}ms</span><span className="text-gray-400">{last.chars}字符</span></>;
+                                                                if (last.type === 'loop_info') return <><span>📊</span><span className="truncate">{last.message}</span></>;
+                                                                return null;
+                                                            })()}
+                                                            <span className="loading loading-dots loading-xs text-gray-400 ml-auto" />
                                                         </summary>
-                                                        <div className="mt-1 space-y-0.5 pl-3 border-l-2 border-gray-200 dark:border-gray-600">
-                                                            {agentStatus.slice(0, -1).map((s, i) => (
-                                                                <div key={i} className="opacity-60">{s}</div>
+                                                        <div className="mt-1.5 space-y-0.5 pl-2 border-l-2 border-gray-200 dark:border-gray-600 max-h-[200px] overflow-y-auto">
+                                                            {agentSteps.slice(0, -1).map((step, i) => (
+                                                                <div key={i} className={`flex items-center gap-1.5 py-0.5 ${step.type === 'tool_result' ? 'opacity-70' : 'opacity-50'}`}>
+                                                                    <span className="flex-shrink-0 w-4 text-center">
+                                                                        {step.type === 'thinking' ? '🤔' :
+                                                                            step.type === 'tool_call' ? (TOOL_ICONS[step.icon || 'default']) :
+                                                                                step.type === 'tool_result' ? '✅' :
+                                                                                    step.type === 'loop_info' ? '📊' : '•'}
+                                                                    </span>
+                                                                    <span className="truncate flex-1">
+                                                                        {step.type === 'thinking' ? `思考 (${step.detail})` :
+                                                                            step.type === 'tool_call' ? `${step.name}: ${step.detail || ''}` :
+                                                                                step.type === 'tool_result' ? `${step.name} ✓` :
+                                                                                    step.message || ''}
+                                                                    </span>
+                                                                    {step.type === 'tool_result' && (
+                                                                        <span className="flex-shrink-0 text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1 rounded">
+                                                                            {step.elapsed_ms}ms · {step.chars}字符
+                                                                        </span>
+                                                                    )}
+                                                                    {step.type === 'loop_info' && (
+                                                                        <span className="flex-shrink-0 text-[10px] bg-blue-500/10 text-blue-600 dark:text-blue-400 px-1 rounded">ctx</span>
+                                                                    )}
+                                                                </div>
                                                             ))}
                                                         </div>
                                                     </details>
@@ -1645,7 +1691,7 @@ function ChatSessionItem({
                 <div className="flex items-center justify-between mt-0.5">
                     <p className="text-xs text-gray-400 truncate pr-2">
                         {session.workspace
-                            ? <span className="flex items-center gap-1"><FolderOpen size={10} />{session.workspace.split('/').pop()}</span>
+                            ? <span className="flex items-center gap-1"><FolderOpen size={10} />{session.workspace?.split('/').pop()}</span>
                             : (getLastMessage(session) || <span className="italic opacity-50">{t('chat.new_chat', '新对话')}</span>)
                         }
                     </p>

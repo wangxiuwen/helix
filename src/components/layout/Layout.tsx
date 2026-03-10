@@ -261,8 +261,13 @@ function Layout() {
             ],
         },
         {
-            label: '百炼 CodingPlan', name: 'CodingPlan', type: 'openai' as AIProvider['type'],
+            label: '百炼 CodingPlan (OpenAI)', name: 'CodingPlan', type: 'openai' as AIProvider['type'],
             baseUrl: 'https://coding.dashscope.aliyuncs.com/v1', model: 'qwen3-coder-plus',
+            models: ['qwen3-coder-plus', 'qwen-coder-plus', 'qwen-coder-turbo'],
+        },
+        {
+            label: '百炼 CodingPlan (Anthropic)', name: 'CodingPlan-Anthropic', type: 'openai' as AIProvider['type'],
+            baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic', model: 'qwen3-coder-plus',
             models: ['qwen3-coder-plus', 'qwen-coder-plus', 'qwen-coder-turbo'],
         },
         {

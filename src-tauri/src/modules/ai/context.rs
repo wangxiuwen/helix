@@ -182,8 +182,7 @@ pub fn list_conversations(limit: usize) -> Result<Vec<ConversationLog>, String> 
                 continue;
             }
 
-            let content =
-                std::fs::read_to_string(&log_path).unwrap_or_default();
+            let content = std::fs::read_to_string(&log_path).unwrap_or_default();
             let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
             let message_count = lines.len();
 
@@ -255,7 +254,11 @@ pub async fn summarize_conversation(session_id: &str) -> Result<String, String> 
             "assistant" => "AI",
             _ => &entry.role,
         };
-        let line = format!("[{}]: {}\n", prefix, &entry.content[..entry.content.len().min(300)]);
+        let line = format!(
+            "[{}]: {}\n",
+            prefix,
+            &entry.content[..entry.content.len().min(300)]
+        );
         chars += line.len();
         if chars > 3000 {
             transcript.push_str("...(truncated)\n");
@@ -265,8 +268,8 @@ pub async fn summarize_conversation(session_id: &str) -> Result<String, String> 
     }
 
     // Call AI for summarization
-    let config = crate::modules::config::load_app_config()
-        .map_err(|e| format!("load config: {}", e))?;
+    let config =
+        crate::modules::config::load_app_config().map_err(|e| format!("load config: {}", e))?;
     let ai = &config.ai_config;
 
     if ai.api_key.is_empty() && ai.provider != "ollama" {
@@ -481,7 +484,11 @@ pub fn search_knowledge(query: &str, limit: usize) -> Result<Vec<KnowledgeItem>,
         .collect();
 
     matches.sort_by(|a, b| b.0.cmp(&a.0));
-    let results: Vec<KnowledgeItem> = matches. iter().take(limit).map(|(_, ki)| (*ki).clone()).collect();
+    let results: Vec<KnowledgeItem> = matches
+        .iter()
+        .take(limit)
+        .map(|(_, ki)| (*ki).clone())
+        .collect();
 
     Ok(results)
 }
@@ -580,7 +587,13 @@ pub fn get_full_context(session_id: Option<&str>, workspace: Option<String>) -> 
         if !recent.is_empty() {
             let conv_summary: Vec<String> = recent
                 .iter()
-                .map(|c| format!("- [{}] {}", c.title, c.summary.lines().take(2).collect::<Vec<_>>().join(" ")))
+                .map(|c| {
+                    format!(
+                        "- [{}] {}",
+                        c.title,
+                        c.summary.lines().take(2).collect::<Vec<_>>().join(" ")
+                    )
+                })
                 .collect();
 
             sections.push(format!(
@@ -778,4 +791,381 @@ fn load_index() -> Result<ContextIndex, String> {
             last_updated: now_rfc3339(),
         })
     }
+}
+
+// ============================================================================
+// Three-Layer Context Management Engine (Antigravity Architecture)
+//
+// Ported from Gemini CLI (Antigravity) context-manager.js
+// Layer 1: Tool Output Masking — mask old large tool outputs (head+tail)
+// Layer 2: Smart Sliding Window — preserve tool_call/tool_result pairs
+// Layer 3: Overflow Prevention — emergency trim when limits exceeded
+// ============================================================================
+
+// --- Configuration constants (matching Antigravity context-manager.js) ---
+const CHARS_PER_TOKEN: usize = 3;
+const DEFAULT_CONTEXT_LIMIT: usize = 131072; // tokens
+
+// Layer 1: Tool Output Masking
+const TOOL_PROTECTION_THRESHOLD: usize = 30000; // protect latest 30k tokens of tool output
+const MIN_PRUNABLE_THRESHOLD: usize = 15000; // min prunable tokens to trigger masking
+const MAX_TOOL_RESULT_CHARS: usize = 8000; // only mask tool results larger than this
+const PREVIEW_HEAD_CHARS: usize = 500; // keep first N chars after masking
+const PREVIEW_TAIL_CHARS: usize = 500; // keep last N chars after masking
+
+// Layer 3: Overflow Prevention
+const OVERFLOW_SAFETY_MARGIN: f64 = 0.85; // hard limit = context_limit * 85%
+
+/// Estimate token count from character length
+fn estimate_tokens(text: &str) -> usize {
+    (text.len() + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN
+}
+
+/// Estimate total tokens for a messages array
+fn estimate_messages_tokens(messages: &[Value]) -> usize {
+    messages
+        .iter()
+        .map(|m| {
+            let content_tokens = m
+                .get("content")
+                .and_then(|c| c.as_str())
+                .map(|s| estimate_tokens(s))
+                .unwrap_or(0);
+            let tool_calls_tokens = m
+                .get("tool_calls")
+                .map(|tc| estimate_tokens(&tc.to_string()))
+                .unwrap_or(0);
+            content_tokens + tool_calls_tokens
+        })
+        .sum()
+}
+
+/// Get message content as string length
+fn msg_content_len(msg: &Value) -> usize {
+    msg.get("content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.len())
+        .unwrap_or(0)
+}
+
+// ============================================================================
+// Layer 1: Tool Output Masking
+// ============================================================================
+
+/// Mask old large tool outputs to reduce context size.
+/// Recent tool outputs within the protection window are preserved intact.
+/// Older large tool outputs are truncated to head+tail preview.
+fn mask_tool_outputs(messages: Vec<Value>) -> Vec<Value> {
+    let mut result = messages;
+    let mut protected_tokens: usize = 0;
+    let mut prunable_items: Vec<(usize, usize, usize)> = Vec::new(); // (index, tokens, content_len)
+
+    // Reverse scan: protect recent tool outputs, mark old large ones
+    for i in (0..result.len()).rev() {
+        let role = result[i].get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role != "tool" {
+            continue;
+        }
+
+        let content = result[i]
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        let tokens = estimate_tokens(content);
+        let content_len = content.len();
+
+        if protected_tokens < TOOL_PROTECTION_THRESHOLD {
+            // Inside protection window — don't touch
+            protected_tokens += tokens;
+            continue;
+        }
+
+        // Outside protection window — mark if large enough
+        if content_len > MAX_TOOL_RESULT_CHARS {
+            prunable_items.push((i, tokens, content_len));
+        }
+    }
+
+    // Check batch threshold
+    let total_prunable: usize = prunable_items.iter().map(|(_, t, _)| t).sum();
+    if total_prunable < MIN_PRUNABLE_THRESHOLD {
+        return result;
+    }
+
+    // Execute masking
+    let mut saved_tokens: usize = 0;
+    for (index, tokens, content_len) in &prunable_items {
+        let content = result[*index]
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let head: String = content.chars().take(PREVIEW_HEAD_CHARS).collect();
+        let tail: String = {
+            let chars: Vec<char> = content.chars().collect();
+            if chars.len() > PREVIEW_TAIL_CHARS {
+                chars[chars.len() - PREVIEW_TAIL_CHARS..].iter().collect()
+            } else {
+                content.clone()
+            }
+        };
+        let lines = content.lines().count();
+        let approx_kb = content_len / 1024;
+
+        let masked =
+            format!(
+            "[Tool output truncated — original: {} lines, ~{}KB]\n{}\n...[{} lines omitted]...\n{}",
+            lines, approx_kb, head, lines.saturating_sub(20), tail
+        );
+
+        let masked_tokens = estimate_tokens(&masked);
+        saved_tokens += tokens.saturating_sub(masked_tokens);
+
+        // Preserve all other fields (tool_call_id, name, etc.)
+        if let Some(obj) = result[*index].as_object_mut() {
+            obj.insert("content".to_string(), Value::String(masked));
+        }
+    }
+
+    if saved_tokens > 0 {
+        tracing::info!(
+            "[context] Layer 1: Masked {} tool outputs, saved ~{} tokens",
+            prunable_items.len(),
+            saved_tokens
+        );
+    }
+
+    result
+}
+
+// ============================================================================
+// Layer 2: Smart Sliding Window (replaces simple optimize_chat_history_values)
+// ============================================================================
+
+/// Smart sliding window that:
+/// 1. Preserves leading system messages
+/// 2. Preserves the latest user message
+/// 3. Respects tool_call/tool_result pairs (never splits them)
+/// 4. Fills remaining budget with newest messages first
+fn smart_sliding_window(mut messages: Vec<Value>, max_chars: usize) -> Vec<Value> {
+    let total_chars: usize = messages.iter().map(|m| msg_content_len(m)).sum();
+
+    if total_chars <= max_chars {
+        return messages;
+    }
+
+    tracing::warn!(
+        "[context] Layer 2: Sliding window triggered. Total: {} chars > Max: {}",
+        total_chars,
+        max_chars
+    );
+
+    let mut optimized = Vec::new();
+    let mut current_chars: usize = 0;
+
+    // 1. Keep leading system messages
+    while let Some(first) = messages.first() {
+        if first.get("role").and_then(|r| r.as_str()) == Some("system") {
+            let msg = messages.remove(0);
+            current_chars += msg_content_len(&msg);
+            optimized.push(msg);
+        } else {
+            break;
+        }
+    }
+
+    // 2. Keep the latest message
+    let latest_msg = if !messages.is_empty() {
+        let msg = messages.remove(messages.len() - 1);
+        current_chars += msg_content_len(&msg);
+        Some(msg)
+    } else {
+        None
+    };
+
+    // 3. Fill from newest to oldest, respecting tool_call/tool_result pairs
+    let mut middle_history = Vec::new();
+    let mut i = messages.len();
+    let mut truncated = false;
+
+    while i > 0 {
+        i -= 1;
+        let msg = &messages[i];
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+
+        // If this is a tool result, we must include its matching assistant+tool_calls
+        if role == "tool" {
+            // Collect all consecutive tool results + their predecessor assistant
+            let mut tool_group = vec![i];
+            let mut j = i;
+            // Walk backwards to find more tool results and the assistant with tool_calls
+            while j > 0 {
+                j -= 1;
+                let prev_role = messages[j]
+                    .get("role")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("");
+                if prev_role == "tool" {
+                    tool_group.push(j);
+                } else if prev_role == "assistant" && messages[j].get("tool_calls").is_some() {
+                    tool_group.push(j);
+                    break;
+                } else {
+                    break;
+                }
+            }
+
+            // Calculate total size of the group
+            let group_chars: usize = tool_group
+                .iter()
+                .map(|&idx| msg_content_len(&messages[idx]))
+                .sum();
+
+            if current_chars + group_chars < max_chars {
+                current_chars += group_chars;
+                // Add group in original order (reversed because tool_group is newest-first)
+                for &idx in tool_group.iter().rev() {
+                    middle_history.push(messages[idx].clone());
+                }
+                i = *tool_group.last().unwrap_or(&i); // Skip past the group
+            } else {
+                truncated = true;
+                break;
+            }
+        } else {
+            let msg_len = msg_content_len(msg);
+            if current_chars + msg_len < max_chars {
+                current_chars += msg_len;
+                middle_history.push(msg.clone());
+            } else {
+                truncated = true;
+                break;
+            }
+        }
+    }
+
+    if truncated {
+        middle_history.push(json!({
+            "role": "system",
+            "content": "... [较早的历史记录已根据上下文容量限制被自动折叠] ..."
+        }));
+    }
+
+    // Assemble: System(s) -> Middle History (oldest first) -> Latest Msg
+    middle_history.reverse();
+    optimized.extend(middle_history);
+
+    if let Some(msg) = latest_msg {
+        optimized.push(msg);
+    }
+
+    tracing::info!(
+        "[context] Layer 2: {} msgs -> {} msgs, {} chars -> {} chars",
+        total_chars / CHARS_PER_TOKEN,
+        optimized.len(),
+        total_chars,
+        current_chars
+    );
+
+    optimized
+}
+
+// ============================================================================
+// Layer 3: Overflow Prevention
+// ============================================================================
+
+/// Check if messages would overflow the context window.
+/// Returns (safe, total_tokens, hard_limit, usage_percent)
+fn check_overflow(messages: &[Value], context_limit: usize) -> (bool, usize, usize, usize) {
+    let total_tokens = estimate_messages_tokens(messages);
+    let hard_limit = (context_limit as f64 * OVERFLOW_SAFETY_MARGIN) as usize;
+    let usage_percent = if context_limit > 0 {
+        (total_tokens * 100) / context_limit
+    } else {
+        0
+    };
+    (
+        total_tokens < hard_limit,
+        total_tokens,
+        hard_limit,
+        usage_percent,
+    )
+}
+
+/// Emergency trim: keep only the latest 30% of messages
+fn emergency_trim(messages: Vec<Value>) -> Vec<Value> {
+    let keep_count = std::cmp::max(10, messages.len() * 30 / 100);
+    let start = messages.len().saturating_sub(keep_count);
+
+    let mut trimmed = vec![json!({
+        "role": "system",
+        "content": "[Earlier context was truncated due to context window overflow. Starting fresh from recent messages.]"
+    })];
+    trimmed.extend(messages.into_iter().skip(start));
+
+    tracing::warn!(
+        "[context] Layer 3: Emergency trim executed, kept {} messages",
+        trimmed.len()
+    );
+
+    trimmed
+}
+
+// ============================================================================
+// Public API: Full 3-Layer Context Management Pipeline
+// ============================================================================
+
+/// Full Antigravity 3-layer context management pipeline.
+/// Call this before sending messages to the LLM API.
+///
+/// Pipeline: Layer 1 (mask tool outputs) → Layer 2 (sliding window) → Layer 3 (overflow check)
+pub fn manage_context(messages: Vec<Value>, max_chars: usize) -> Vec<Value> {
+    let original_count = messages.len();
+    let original_tokens = estimate_messages_tokens(&messages);
+
+    // Layer 1: Tool Output Masking
+    let after_masking = mask_tool_outputs(messages);
+    let masking_tokens = estimate_messages_tokens(&after_masking);
+    if masking_tokens < original_tokens {
+        tracing::info!(
+            "[context] Layer 1 saved: {} -> {} tokens",
+            original_tokens,
+            masking_tokens
+        );
+    }
+
+    // Layer 2: Smart Sliding Window
+    let after_window = smart_sliding_window(after_masking, max_chars);
+
+    // Layer 3: Overflow Prevention
+    let (safe, total_tokens, hard_limit, usage_pct) =
+        check_overflow(&after_window, DEFAULT_CONTEXT_LIMIT);
+
+    tracing::info!(
+        "[context] Pipeline: {} msgs -> {} msgs | Tokens: ~{} | Context: {}% | Safe: {}",
+        original_count,
+        after_window.len(),
+        total_tokens,
+        usage_pct,
+        safe
+    );
+
+    if !safe {
+        tracing::warn!(
+            "[context] Layer 3: Overflow detected! {} tokens > {} limit ({}%)",
+            total_tokens,
+            hard_limit,
+            usage_pct
+        );
+        return emergency_trim(after_window);
+    }
+
+    after_window
+}
+
+/// Backward-compatible wrapper for the old API.
+/// Now delegates to the full 3-layer pipeline.
+pub fn optimize_chat_history_values(messages: Vec<Value>, max_chars: usize) -> Vec<Value> {
+    manage_context(messages, max_chars)
 }

@@ -10,6 +10,11 @@ use tracing::{error, info};
 use crate::models::config::AiModelConfig;
 use crate::modules::config::{load_app_config, save_app_config};
 
+/// Sanitize a base URL (currently passthrough).
+pub fn sanitize_base_url(url: &str) -> String {
+    url.to_string()
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -56,7 +61,13 @@ pub async fn team_chat_fetch(
     }
     req = req.headers(hmap);
 
-    if let Some(b) = body {
+    if let Some(mut b) = body {
+        // Antigravity Context Optimization: trim messages if too long
+        if let Some(msgs) = b.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            let optimized =
+                crate::modules::ai::context::optimize_chat_history_values(msgs.clone(), 64000);
+            *msgs = optimized;
+        }
         req = req.json(&b);
     }
 
@@ -127,7 +138,8 @@ pub async fn chat_complete(
         messages.len()
     );
 
-    let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+    let base = sanitize_base_url(&config.base_url);
+    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -360,11 +372,7 @@ pub async fn ai_test_connection() -> Result<Value, String> {
 /// List available models from an OpenAI-compatible provider
 #[tauri::command]
 pub async fn ai_list_models(base_url: String, api_key: String) -> Result<Value, String> {
-    let effective_url = if base_url.contains("coding.dashscope.aliyuncs.com") {
-        "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()
-    } else {
-        base_url.clone()
-    };
+    let effective_url = sanitize_base_url(&base_url);
 
     let url = format!("{}/models", effective_url.trim_end_matches('/'));
     info!("Fetching models from: {}", url);

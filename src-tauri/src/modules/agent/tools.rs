@@ -146,7 +146,13 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("timeout_secs", "integer", Some("Timeout in seconds (default: 30)")),
             ], vec!["command"]),
             |args: Value, ctx: ToolContext| async move {
+                let cmd = args["command"].as_str().unwrap_or("?");
+                let detail = format!("$ {}", if cmd.len() > 60 { &cmd[..60] } else { cmd });
+                super::core::emit_agent_progress("tool_call", json!({ "name": "shell_exec", "icon": "terminal", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_shell_exec(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "shell_exec", "icon": "terminal", "chars": r.len(), "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -158,7 +164,13 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("max_lines", "integer", Some("Max lines to return (default: 500)")),
             ], vec!["path"]),
             |args: Value, ctx: ToolContext| async move {
+                let path = args["path"].as_str().unwrap_or("?");
+                let detail = format!("{}", path);
+                super::core::emit_agent_progress("tool_call", json!({ "name": "file_read", "icon": "file", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_file_read(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "file_read", "icon": "file", "chars": r.len(), "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -171,7 +183,14 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("append", "boolean", Some("Append instead of overwrite")),
             ], vec!["path", "content"]),
             |args: Value, ctx: ToolContext| async move {
+                let path = args["path"].as_str().unwrap_or("?");
+                let detail = format!("{}", path);
+                super::core::emit_agent_progress("tool_call", json!({ "name": "file_write", "icon": "edit", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_file_write(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                let content_len = args["content"].as_str().map(|s| s.len()).unwrap_or(0);
+                super::core::emit_agent_progress("tool_result", json!({ "name": "file_write", "icon": "edit", "chars": content_len, "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -185,7 +204,13 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("all", "boolean", Some("Replace all occurrences")),
             ], vec!["path", "search", "replace"]),
             |args: Value, ctx: ToolContext| async move {
+                let path = args["path"].as_str().unwrap_or("?");
+                let detail = format!("{}", path);
+                super::core::emit_agent_progress("tool_call", json!({ "name": "file_edit", "icon": "edit", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_file_edit(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "file_edit", "icon": "edit", "chars": r.len(), "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -199,7 +224,14 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("body", "string", Some("Request body")),
             ], vec!["url"]),
             |args: Value, ctx: ToolContext| async move {
+                let url = args["url"].as_str().unwrap_or("?");
+                let method = args["method"].as_str().unwrap_or("GET");
+                let detail = format!("{} {}", method, url);
+                super::core::emit_agent_progress("tool_call", json!({ "name": "web_fetch", "icon": "globe", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_web_fetch(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "web_fetch", "icon": "globe", "chars": r.len(), "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -211,7 +243,13 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("num_results", "integer", Some("Number of results (default: 5)")),
             ], vec!["query"]),
             |args: Value, ctx: ToolContext| async move {
+                let query = args["query"].as_str().unwrap_or("?");
+                let detail = format!("{}", query);
+                super::core::emit_agent_progress("tool_call", json!({ "name": "web_search", "icon": "search", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_web_search(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "web_search", "icon": "search", "chars": r.len(), "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -223,7 +261,12 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("value", "string", Some("Content to store")),
             ], vec!["key", "value"]),
             |args: Value, ctx: ToolContext| async move {
+                let key = args["key"].as_str().unwrap_or("?");
+                super::core::emit_agent_progress("tool_call", json!({ "name": "memory_store", "icon": "brain", "detail": key }));
+                let start = std::time::Instant::now();
                 let r = tool_memory_store(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "memory_store", "icon": "brain", "chars": r.len(), "elapsed_ms": elapsed, "detail": key }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -234,7 +277,12 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("query", "string", Some("Search query for memories")),
             ], vec!["query"]),
             |args: Value, ctx: ToolContext| async move {
+                let query = args["query"].as_str().unwrap_or("?");
+                super::core::emit_agent_progress("tool_call", json!({ "name": "memory_recall", "icon": "brain", "detail": query }));
+                let start = std::time::Instant::now();
                 let r = tool_memory_recall(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "memory_recall", "icon": "brain", "chars": r.len(), "elapsed_ms": elapsed, "detail": query }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -247,7 +295,12 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("max_depth", "integer", Some("Max directory depth (default: 1)")),
             ], vec!["path"]),
             |args: Value, ctx: ToolContext| async move {
+                let path = args["path"].as_str().unwrap_or("?");
+                super::core::emit_agent_progress("tool_call", json!({ "name": "list_dir", "icon": "folder", "detail": path }));
+                let start = std::time::Instant::now();
                 let r = tool_list_dir(&args).map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "list_dir", "icon": "folder", "chars": r.len(), "elapsed_ms": elapsed, "detail": path }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -262,7 +315,14 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("max_results", "integer", None),
             ], vec!["pattern", "path"]),
             |args: Value, ctx: ToolContext| async move {
+                let pattern = args["pattern"].as_str().unwrap_or("?");
+                let path = args["path"].as_str().unwrap_or(".");
+                let detail = format!("'{}' in {}", pattern, path);
+                super::core::emit_agent_progress("tool_call", json!({ "name": "grep_search", "icon": "search", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_grep_search(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "grep_search", "icon": "search", "chars": r.len(), "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -276,7 +336,14 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("max_results", "integer", None),
             ], vec!["path"]),
             |args: Value, ctx: ToolContext| async move {
+                let pattern = args["name"].as_str().unwrap_or("*");
+                let path = args["path"].as_str().unwrap_or(".");
+                let detail = format!("'{}' in {}", pattern, path);
+                super::core::emit_agent_progress("tool_call", json!({ "name": "find_files", "icon": "folder", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_find_files(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "find_files", "icon": "folder", "chars": r.len(), "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -288,7 +355,12 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("limit", "integer", Some("Max number of results")),
             ], vec![]),
             |args: Value, ctx: ToolContext| async move {
+                let filter = args["filter"].as_str().unwrap_or("all");
+                super::core::emit_agent_progress("tool_call", json!({ "name": "process_list", "icon": "cpu", "detail": filter }));
+                let start = std::time::Instant::now();
                 let r = tool_process_list(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "process_list", "icon": "cpu", "chars": r.len(), "elapsed_ms": elapsed, "detail": filter }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -301,7 +373,12 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("signal", "string", Some("Signal (default: TERM)")),
             ], vec![]),
             |args: Value, ctx: ToolContext| async move {
+                let detail = args["name"].as_str().or(args["pid"].as_str()).unwrap_or("?");
+                super::core::emit_agent_progress("tool_call", json!({ "name": "process_kill", "icon": "cpu", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_process_kill(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "process_kill", "icon": "cpu", "chars": r.len(), "elapsed_ms": elapsed }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -310,7 +387,11 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
             "Get system information: OS, CPU, memory, disk, uptime.",
             schema(vec![], vec![]),
             |args: Value, ctx: ToolContext| async move {
+                super::core::emit_agent_progress("tool_call", json!({ "name": "sysinfo", "icon": "cpu", "detail": "系统信息" }));
+                let start = std::time::Instant::now();
                 let r = tool_sysinfo(&args).map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "sysinfo", "icon": "cpu", "chars": r.len(), "elapsed_ms": elapsed }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -321,7 +402,12 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("path", "string", Some("Absolute path to the file to send")),
             ], vec!["path"]),
             |args: Value, ctx: ToolContext| async move {
+                let path = args["path"].as_str().unwrap_or("?");
+                super::core::emit_agent_progress("tool_call", json!({ "name": "chat_send_file", "icon": "file", "detail": path }));
+                let start = std::time::Instant::now();
                 let r = tool_chat_send_file(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "chat_send_file", "icon": "file", "chars": r.len(), "elapsed_ms": elapsed, "detail": path }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -341,7 +427,11 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("display", "integer", Some("Display number to capture (default: main display)")),
             ], vec![]),
             |args: Value, ctx: ToolContext| async move {
+                super::core::emit_agent_progress("tool_call", json!({ "name": "desktop_screenshot", "icon": "camera", "detail": "截图" }));
+                let start = std::time::Instant::now();
                 let r = tool_desktop_screenshot(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "desktop_screenshot", "icon": "camera", "chars": r.len(), "elapsed_ms": elapsed }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -355,7 +445,13 @@ pub fn build_tools() -> Vec<Arc<dyn agents_sdk::Tool>> {
                 param("text", "string", Some("Text to type (for fill action)")),
             ], vec!["action"]),
             |args: Value, ctx: ToolContext| async move {
+                let action = args["action"].as_str().unwrap_or("?");
+                let detail = format!("{}", action);
+                super::core::emit_agent_progress("tool_call", json!({ "name": "browser_use", "icon": "globe", "detail": detail }));
+                let start = std::time::Instant::now();
                 let r = tool_browser_use(&args).await.map_err(|e| anyhow::anyhow!(e))?;
+                let elapsed = start.elapsed().as_millis();
+                super::core::emit_agent_progress("tool_result", json!({ "name": "browser_use", "icon": "globe", "chars": r.len(), "elapsed_ms": elapsed, "detail": detail }));
                 Ok(ToolResult::text(&ctx, r))
             },
         ),
@@ -1291,7 +1387,8 @@ pub async fn tool_image_describe(
         return Err("API key not configured".to_string());
     }
 
-    let url_str = format!("{}/chat/completions", ai.base_url.trim_end_matches('/'));
+    let base = crate::modules::ai::chat::sanitize_base_url(&ai.base_url);
+    let url_str = format!("{}/chat/completions", base.trim_end_matches('/'));
     let body = json!({
         "model": ai.model,
         "messages": [{"role":"user","content":[
